@@ -1,0 +1,8 @@
+{
+  "name": "StreamFlixok",
+  "description": "Plataforma de contenidos de streaming para películas, series y directos con reproductor interactivo y catálogo.",
+  "requestFramePermissions": [],
+  "capabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

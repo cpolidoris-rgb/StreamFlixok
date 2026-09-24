@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 280 64" height="40" fill="none">
+  <defs>
+    <linearGradient id="poliGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#6366f1" />
+      <stop offset="50%" stop-color="#38bdf8" />
+      <stop offset="100%" stop-color="#34d399" />
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#38bdf8" flood-opacity="0.3" />
+    </filter>
+  </defs>
+  
+  <!-- Outer gradient border with rounded corners -->
+  <rect x="2" y="4" width="56" height="56" rx="16" fill="url(#poliGrad)" />
+  
+  <!-- Inner dark container -->
+  <rect x="4.5" y="6.5" width="51" height="51" rx="13.5" fill="#030712" />
+  
+  <!-- Code brackets & slash (< / >) in sky-400 -->
+  <g stroke="#38bdf8" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <!-- Left bracket < -->
+    <path d="M22 24 L14 32 L22 40" />
+    <!-- Right bracket > -->
+    <path d="M38 40 L46 32 L38 24" />
+    <!-- Slash / -->
+    <path d="M33 20 L26 44" />
+  </g>
+  
+  <!-- Typography PoliWebs -->
+  <text x="74" y="34" font-family="system-ui, -apple-system, sans-serif" font-weight="900" font-size="28" fill="#ffffff" letter-spacing="-0.5">Poli<tspan fill="#38bdf8">Webs</tspan></text>
+  
+  <!-- Subtitle DESARROLLO WEB -->
+  <text x="75" y="52" font-family="system-ui, -apple-system, sans-serif" font-weight="800" font-size="11.5" fill="#f8fafc" letter-spacing="2.2">DESARROLLO WEB</text>
+</svg>
