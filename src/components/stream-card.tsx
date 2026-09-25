@@ -13,9 +13,12 @@ import { useDoc } from '@/firebase/firestore/use-doc';
 import { doc, updateDoc, arrayUnion, arrayRemove } from 'firebase/firestore';
 import { cn } from '@/lib/utils';
 
+import { enrichStream, isStreamLive } from '@/lib/stream-catalog';
+
 const FALLBACK_IMAGE = 'https://images.unsplash.com/photo-1598488035139-bdbb2231ce04?auto=format&fit=crop&w=1200&q=80';
 
-export default function StreamCard({ stream, rank }: { stream: Stream; rank?: number }) {
+export default function StreamCard({ stream: rawStream, rank }: { stream: Stream; rank?: number }) {
+  const stream = enrichStream(rawStream);
   const { user } = useUser();
   const firestore = useFirestore();
 
@@ -29,7 +32,7 @@ export default function StreamCard({ stream, rank }: { stream: Stream; rank?: nu
   const thumbUrl = stream.thumbnailUrl || (stream as any).thumbnail || (stream as any).coverUrl || (stream as any).imageUrl || (stream as any).image || (stream as any).posterUrl || FALLBACK_IMAGE;
 
   // Determinar con certeza si el canal está dando señal en vivo
-  const isCurrentlyLive = stream.situation === 'live' || stream.isLive === true || (stream.liveVideoId && stream.liveVideoId.length === 11) || (stream.isWebRTC && stream.situation !== 'offline');
+  const isCurrentlyLive = isStreamLive(stream);
 
   const handleToggleFavorite = async (e: React.MouseEvent) => {
     e.preventDefault();

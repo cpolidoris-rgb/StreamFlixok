@@ -2,6 +2,7 @@ import React from 'react';
 import Home from './app/page';
 import StreamPage from './app/stream/[id]/page';
 import BroadcastStudio from './components/broadcast-studio';
+import SchedulePage from './app/schedule/page';
 import { FirebaseProvider } from './firebase/provider';
 import { MiniPlayerProvider } from './providers/mini-player-provider';
 import { usePathname } from './shims/next-navigation';
@@ -16,6 +17,8 @@ export function App() {
     content = <StreamPage />;
   } else if (pathname === '/broadcast') {
     content = <BroadcastStudio />;
+  } else if (pathname === '/schedule') {
+    content = <SchedulePage />;
   }
 
   return (

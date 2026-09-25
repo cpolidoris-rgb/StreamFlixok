@@ -4,6 +4,7 @@ import Link from 'next/link';
 import {
   LogOut,
   Video,
+  Calendar,
 } from 'lucide-react';
 import { useUser } from '@/firebase/auth/use-user';
 import { useAuth, useFirestore, useMemoFirebase } from '@/firebase/provider';
@@ -83,6 +84,13 @@ export default function AppHeader({
         {/* NAVEGACIÓN - DESPLAZADA A LA DERECHA */}
         <nav className="flex items-center gap-8">
           <div className="hidden xl:flex items-center gap-6 border-r border-white/10 pr-8 whitespace-nowrap">
+            <Link
+              href="/schedule"
+              className="flex items-center gap-1.5 text-xs font-black uppercase tracking-wider text-primary hover:text-white transition-all duration-300 opacity-90 hover:opacity-100 bg-primary/10 hover:bg-primary/20 px-3 py-1.5 rounded-full border border-primary/30"
+            >
+              <Calendar className="w-3.5 h-3.5 text-primary" />
+              <span>Grilla Semanal</span>
+            </Link>
             {categories.map((cat) => (
               <Link
                 key={cat}

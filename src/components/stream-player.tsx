@@ -1,14 +1,15 @@
 'use client';
 
 import type { Stream } from '@/lib/data';
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { Radio, MonitorOff, Zap, Loader2 } from 'lucide-react';
 import Image from 'next/image';
 import WebRTCPlayer from './webrtc-player';
+import { findMasterChannel } from '@/lib/stream-catalog';
 
 interface StreamPlayerProps {
   stream: Stream;
-  isLive: boolean;
+  isLive?: boolean;
   liveVideoId?: string;
   apiStatus?: 'live' | 'offline' | 'loading' | 'error' | 'unknown';
   muted?: boolean;
@@ -22,10 +23,11 @@ interface StreamPlayerProps {
 export default function StreamPlayer({ 
   stream, 
   liveVideoId: discoveredVideoId, 
-  isLive, 
-  apiStatus,
+  isLive = true, 
+  apiStatus = 'live',
   muted = false // Audio habilitado por defecto
 }: StreamPlayerProps) {
+  const [forceChannelStream, setForceChannelStream] = useState(false);
   const platform = (stream.platform || 'YouTube').toLowerCase();
   const RED_FILTER = { filter: 'invert(18%) sepia(100%) saturate(7413%) hue-rotate(359deg) brightness(101%) contrast(120%)' };
 
@@ -36,9 +38,15 @@ export default function StreamPlayer({
     const isMutedBool = muted ? 'true' : 'false';
 
     if (platform === 'youtube') {
+      const channelId = stream.platformChannelId || findMasterChannel(stream)?.platformChannelId;
+
+      if (forceChannelStream && channelId && channelId.startsWith('UC')) {
+        return `https://www.youtube.com/embed/live_stream?channel=${channelId}&autoplay=1&mute=${isMutedParam}&enablejsapi=1`;
+      }
+
       let videoIdToUse = '';
 
-      // PRIORIDAD: Video detectado por API -> Video manual en DB -> URL de respaldo
+      // PRIORIDAD: Video detectado por API -> Video manual en DB -> URL de respaldo -> Catálogo Maestro
       if (discoveredVideoId && discoveredVideoId.length === 11) {
         videoIdToUse = discoveredVideoId;
       } else if (stream.liveVideoId && stream.liveVideoId.length === 11) {
@@ -48,13 +56,20 @@ export default function StreamPlayer({
         if (match) videoIdToUse = match[1];
       }
 
-      if (videoIdToUse) {
-        // Mute=0 habilita el sonido
-        return `https://www.youtube.com/embed/${videoIdToUse}?autoplay=1&mute=${isMutedParam}&rel=0&showinfo=0&modestbranding=1`;
+      if (!videoIdToUse) {
+        const master = findMasterChannel(stream);
+        if (master?.liveVideoId && master.liveVideoId.length === 11) {
+          videoIdToUse = master.liveVideoId;
+        }
       }
 
-      if (stream.platformChannelId) {
-        return `https://www.youtube.com/embed/live_stream?channel=${stream.platformChannelId}&autoplay=1&mute=${isMutedParam}`;
+      if (videoIdToUse) {
+        // Mute=0 habilita el sonido
+        return `https://www.youtube.com/embed/${videoIdToUse}?autoplay=1&mute=${isMutedParam}&rel=0&showinfo=0&modestbranding=1&enablejsapi=1`;
+      }
+
+      if (channelId && channelId.startsWith('UC')) {
+        return `https://www.youtube.com/embed/live_stream?channel=${channelId}&autoplay=1&mute=${isMutedParam}&enablejsapi=1`;
       }
     }
 
@@ -74,7 +89,7 @@ export default function StreamPlayer({
     }
 
     return null;
-  }, [stream, discoveredVideoId, platform, muted]);
+  }, [stream, discoveredVideoId, platform, muted, forceChannelStream]);
 
   // ESTADO 1: CARGANDO (Solo si no tenemos una URL que cargar todavía)
   if (apiStatus === 'loading' && !embedUrl) {
@@ -154,7 +169,7 @@ export default function StreamPlayer({
   const isDirectVideo = embedUrl?.endsWith('.mp4') || (embedUrl?.startsWith('http') && !embedUrl.includes('youtube.com') && !embedUrl.includes('twitch.tv') && !embedUrl.includes('kick.com'));
 
   return (
-    <div className="relative h-full w-full bg-black">
+    <div className="relative h-full w-full bg-black group/player">
       {isDirectVideo ? (
         <video
           key={embedUrl}
@@ -171,11 +186,25 @@ export default function StreamPlayer({
           width="100%"
           height="100%"
           allowFullScreen={true}
-          allow="autoplay; fullscreen; picture-in-picture; encrypted-media"
+          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
           referrerPolicy="no-referrer-when-downgrade"
           className="border-0 bg-black w-full h-full shadow-2xl"
           title={`${stream.streamer} Live Player`}
         />
+      )}
+
+      {/* Selector de señal alternativa para YouTube */}
+      {platform === 'youtube' && (stream.platformChannelId || findMasterChannel(stream)?.platformChannelId) && (
+        <div className="absolute top-3 right-3 z-20 pointer-events-auto">
+          <button
+            onClick={() => setForceChannelStream(prev => !prev)}
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-black/70 hover:bg-black/90 border border-white/20 text-white/90 hover:text-white text-[10px] font-black uppercase tracking-wider backdrop-blur-md shadow-lg transition-all"
+            title="Alternar entre transmisión directa y señal en vivo del canal"
+          >
+            <Radio className="w-2.5 h-2.5 text-red-500 animate-pulse" />
+            <span>{forceChannelStream ? 'Señal: Canal Directo' : 'Alternar Señal'}</span>
+          </button>
+        </div>
       )}
     </div>
   );

@@ -12,6 +12,7 @@ import { useUser } from '@/firebase/auth/use-user';
 import { useDoc } from '@/firebase/firestore/use-doc';
 import { TrendingUp, AlertTriangle, ArrowRight } from 'lucide-react';
 import HeroBanner from '@/components/hero-banner';
+import { enrichStream } from '@/lib/stream-catalog';
 
 const CATEGORIES = ['Streaming', 'TV Noticias', 'TV Abierta', 'Deportes', 'Radio', 'Streamers'];
 
@@ -43,10 +44,10 @@ export function HomeContent() {
                      user?.email === 'cpolidoris2@gmail.com' ||
                      user?.email === 'cpolidoris@gmail.com';
                      
-    if (isMaster) return allRawStreams.filter(Boolean);
+    if (isMaster) return allRawStreams.filter(Boolean).map(enrichStream);
     
     // Show all streams that are published or do not have a rejected status
-    return allRawStreams.filter(s => s && s.status !== 'rejected');
+    return allRawStreams.filter(s => s && s.status !== 'rejected').map(enrichStream);
   }, [allRawStreams, user?.uid, userProfile?.isAdmin, user?.email]);
 
   const dynamicCategories = useMemo(() => {

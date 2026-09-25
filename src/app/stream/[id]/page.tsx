@@ -14,7 +14,7 @@ import {
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import type { Stream, LiveStatus, GeoLocation } from '@/lib/data';
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useRef } from 'react';
 import { useToast } from '@/hooks/use-toast';
 import {
   Popover,
@@ -34,6 +34,7 @@ import {
 } from 'firebase/firestore';
 import { useMiniPlayer } from '@/providers/mini-player-provider';
 import { DEFAULT_STREAMS } from '@/data/defaultStreams';
+import { enrichStream } from '@/lib/stream-catalog';
 
 const XIcon = (props: React.SVGProps<SVGSVGElement>) => (
   <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 16 16" fill="currentColor">
@@ -51,7 +52,7 @@ export function StreamPageContent({ streamId }: { streamId: string }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [currentUrl, setCurrentUrl] = useState('');
   const { toast } = useToast();
-  const { addMiniStream } = useMiniPlayer();
+  const { addMiniStream, closeMiniStream, activeStream } = useMiniPlayer();
   const { user } = useUser();
   const firestore = useFirestore();
   const [userLocation, setUserLocation] = useState<GeoLocation | null>(null);
@@ -62,11 +63,54 @@ export function StreamPageContent({ streamId }: { streamId: string }) {
   );
   
   const { data: rawStream, isLoading: isStreamLoading } = useDoc<Stream>(streamRef);
+  const fallback = useMemo(() => {
+    return DEFAULT_STREAMS.find(s => s.id === streamId) || ({ id: streamId } as Stream);
+  }, [streamId]);
+
   const stream = useMemo(() => {
-    if (rawStream) return rawStream;
-    return DEFAULT_STREAMS.find(s => s.id === streamId) || null;
-  }, [rawStream, streamId]);
-  const [liveStatus, setLiveStatus] = useState<LiveStatus>({ status: 'loading', viewerCount: null });
+    if (rawStream) return enrichStream(rawStream);
+    return enrichStream(fallback);
+  }, [rawStream, fallback]);
+
+  // Si al entrar a la página este canal estaba en el mini player, cerramos la minipantalla
+  useEffect(() => {
+    if (activeStream?.id === streamId) {
+      closeMiniStream();
+    }
+  }, [streamId, activeStream?.id, closeMiniStream]);
+
+  // Referencia actualizada para cuando el usuario salga de la pantalla
+  const streamRefForUnmount = useRef(stream);
+  useEffect(() => {
+    streamRefForUnmount.current = stream;
+  }, [stream]);
+
+  // Al salir de la página completa, transferir la transmisión a la minipantalla (PiP)
+  useEffect(() => {
+    return () => {
+      const s = streamRefForUnmount.current;
+      if (s && s.id && typeof window !== 'undefined') {
+        const nextPath = window.location.pathname;
+        if (!nextPath.startsWith(`/stream/${s.id}`)) {
+          addMiniStream(s);
+        }
+      }
+    };
+  }, [addMiniStream]);
+
+  const [liveStatus, setLiveStatus] = useState<LiveStatus>(() => ({
+    status: (stream?.isLive ?? true) ? 'live' : 'offline',
+    viewerCount: stream?.viewerCount || null
+  }));
+
+  useEffect(() => {
+    if (stream?.viewerCount && liveStatus.viewerCount === null) {
+      setLiveStatus(prev => ({
+        ...prev,
+        viewerCount: stream.viewerCount || null
+      }));
+    }
+  }, [stream?.viewerCount, liveStatus.viewerCount]);
 
   const currentProgram = useMemo(() => {
     if (!stream?.schedule) return null;
@@ -85,6 +129,7 @@ export function StreamPageContent({ streamId }: { streamId: string }) {
     });
   }, [stream]);
 
+  // Detección de ubicación geográfica para métricas (una sola vez)
   useEffect(() => {
     fetch('https://ipapi.co/json/')
       .then(res => res.json())
@@ -98,11 +143,10 @@ export function StreamPageContent({ streamId }: { streamId: string }) {
       .catch(() => {
         setUserLocation({ country: 'Desconocido', region: 'Desconocido', city: 'Desconocido' });
       });
-    return () => { if (stream) addMiniStream(stream); };
-  }, [stream, addMiniStream]);
+  }, []);
 
   useEffect(() => {
-    if (!stream || !firestore) return;
+    if (!stream?.id || !firestore) return;
     
     const record = () => {
       const uId = user?.uid || 'anon_' + Math.random().toString(36).substring(2, 7);
@@ -134,10 +178,10 @@ export function StreamPageContent({ streamId }: { streamId: string }) {
     record();
     const inv = setInterval(record, 30000);
     return () => clearInterval(inv);
-  }, [user, stream, firestore, userLocation, currentProgram]);
+  }, [user?.uid, stream?.id, stream?.streamer, firestore, userLocation?.city, currentProgram?.title]);
 
   useEffect(() => {
-    if (!stream) return;
+    if (!stream?.platformChannelId && !stream?.liveVideoId) return;
     const fetchStatus = async () => {
       try {
         const res = await fetch(`/api/viewer-count?platform=${stream.platform}&channelId=${stream.platformChannelId}&videoId=${stream.liveVideoId || ''}`);
@@ -147,11 +191,11 @@ export function StreamPageContent({ streamId }: { streamId: string }) {
     fetchStatus();
     const inv = setInterval(fetchStatus, 60000);
     return () => clearInterval(inv);
-  }, [stream]);
+  }, [stream?.platform, stream?.platformChannelId, stream?.liveVideoId]);
   
   useEffect(() => { if (typeof window !== 'undefined') setCurrentUrl(window.location.href); }, [streamId]);
 
-  if (isStreamLoading) {
+  if (isStreamLoading && !stream.title && !fallback.title) {
     return <div className="fixed inset-0 flex items-center justify-center bg-black z-50"><Loader2 className="h-12 w-12 animate-spin text-primary" /></div>;
   }
 
