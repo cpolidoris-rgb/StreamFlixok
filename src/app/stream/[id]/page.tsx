@@ -10,6 +10,7 @@ import {
   MapPin,
   Info,
   CalendarDays,
+  Radio,
 } from 'lucide-react';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
@@ -34,7 +35,7 @@ import {
 } from 'firebase/firestore';
 import { useMiniPlayer } from '@/providers/mini-player-provider';
 import { DEFAULT_STREAMS } from '@/data/defaultStreams';
-import { enrichStream } from '@/lib/stream-catalog';
+import { enrichStream, isChannelCurrentlyLive, getRealtimeViewerCount, formatViewerCount, cleanLiveVideoId } from '@/lib/stream-catalog';
 
 const XIcon = (props: React.SVGProps<SVGSVGElement>) => (
   <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 16 16" fill="currentColor">
@@ -97,6 +98,70 @@ export function StreamPageContent({ streamId }: { streamId: string }) {
       }
     };
   }, [addMiniStream]);
+
+  const [discoveredLiveVideoId, setDiscoveredLiveVideoId] = useState<string | null>(null);
+  const [apiLiveState, setApiLiveState] = useState<boolean | null>(null);
+  const [isResolvingLive, setIsResolvingLive] = useState<boolean>(true);
+
+  // Verificación y resolución en tiempo real de la transmisión en vivo activa
+  useEffect(() => {
+    if (!stream?.id) return;
+    let isCancelled = false;
+
+    const checkLiveStream = async () => {
+      try {
+        const platform = (stream.platform || 'YouTube').toLowerCase();
+        if (platform === 'youtube') {
+          const params = new URLSearchParams();
+          params.set('channel', stream.id);
+          if (stream.platformChannelId) params.set('channelId', stream.platformChannelId);
+          if (stream.streamUrl) params.set('streamUrl', stream.streamUrl);
+
+          const res = await fetch(`/api/live-stream?${params.toString()}`);
+          if (res.ok) {
+            const data = await res.json();
+            if (isCancelled) return;
+            if (data.isLive && data.videoId) {
+              setDiscoveredLiveVideoId(data.videoId);
+              setApiLiveState(true);
+            } else if (data.isLive === false) {
+              setDiscoveredLiveVideoId(null);
+              setApiLiveState(false);
+            }
+          }
+        }
+      } catch (e) {
+      } finally {
+        if (!isCancelled) setIsResolvingLive(false);
+      }
+    };
+
+    checkLiveStream();
+    const inv = setInterval(checkLiveStream, 35000);
+    return () => {
+      isCancelled = true;
+      clearInterval(inv);
+    };
+  }, [stream?.id, stream?.platform, stream?.platformChannelId, stream?.streamUrl]);
+
+  const isCurrentlyLive = useMemo(() => {
+    if (apiLiveState !== null) {
+      return apiLiveState;
+    }
+    return isChannelCurrentlyLive(stream);
+  }, [apiLiveState, stream]);
+
+  const realViewerCount = useMemo(() => {
+    return isCurrentlyLive ? getRealtimeViewerCount(stream) : 0;
+  }, [isCurrentlyLive, stream]);
+
+  const playerVideoId = useMemo(() => {
+    if (discoveredLiveVideoId) return discoveredLiveVideoId;
+    if (isCurrentlyLive && stream.liveVideoId && cleanLiveVideoId(stream.liveVideoId)) {
+      return cleanLiveVideoId(stream.liveVideoId);
+    }
+    return undefined;
+  }, [discoveredLiveVideoId, isCurrentlyLive, stream.liveVideoId]);
 
   const [liveStatus, setLiveStatus] = useState<LiveStatus>(() => ({
     status: (stream?.isLive ?? true) ? 'live' : 'offline',
@@ -209,16 +274,33 @@ export function StreamPageContent({ streamId }: { streamId: string }) {
       <div className="relative z-10 flex flex-col min-h-screen">
         <AppHeader searchQuery={searchQuery} setSearchQuery={setSearchQuery} />
         <main className="flex-1 w-full max-w-screen-2xl mx-auto px-4 lg:px-8 pt-24 pb-8 flex flex-col">
-          <div className="mb-4 flex items-center justify-between shrink-0">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 shrink-0">
             <Link href="/" className="text-white/60 hover:text-white uppercase font-black tracking-widest text-[10px] flex items-center gap-2">
               <ArrowLeft className="h-4 w-4" /> Volver
             </Link>
-            <div className="flex items-center gap-3">
-                {currentProgram && (
-                   <Badge className="bg-primary/20 text-primary border-primary/30 font-black uppercase text-[10px] tracking-widest">
-                     EN AIRE: {currentProgram.title}
-                   </Badge>
-                )}
+            <div className="flex flex-wrap items-center gap-3">
+              {isCurrentlyLive ? (
+                <div className="flex items-center gap-2">
+                  <Badge className="bg-red-600 text-white font-black uppercase text-[10px] tracking-widest px-3 py-1 animate-pulse shadow-lg shadow-red-600/30">
+                    <Radio className="w-3 h-3 mr-1.5" /> EN DIRECTO
+                  </Badge>
+                  {realViewerCount > 0 && (
+                    <span className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-black/60 border border-white/10 text-xs font-bold text-white shadow-md">
+                      <Users className="w-3.5 h-3.5 text-red-500 fill-red-500" />
+                      <span>{formatViewerCount(realViewerCount)} espectadores</span>
+                    </span>
+                  )}
+                </div>
+              ) : (
+                <Badge variant="outline" className="border-white/20 text-zinc-400 font-bold uppercase text-[10px] tracking-wider px-3 py-1">
+                  SEÑAL FUERA DE AIRE
+                </Badge>
+              )}
+              {currentProgram && (
+                <Badge className="bg-primary/20 text-primary border-primary/30 font-black uppercase text-[10px] tracking-widest">
+                  EN AIRE: {currentProgram.title}
+                </Badge>
+              )}
             </div>
           </div>
 
@@ -227,9 +309,9 @@ export function StreamPageContent({ streamId }: { streamId: string }) {
                   <div className="relative w-full bg-black rounded-2xl overflow-hidden border border-white/10 shadow-2xl ring-1 ring-white/5 aspect-video max-h-[calc(100vh-280px)] lg:max-h-[calc(100vh-220px)]">
                       <StreamPlayer 
                         stream={stream} 
-                        isLive={liveStatus.status !== 'offline'} 
-                        liveVideoId={liveStatus.liveVideoId} 
-                        apiStatus={liveStatus.status}
+                        isLive={isCurrentlyLive} 
+                        liveVideoId={playerVideoId} 
+                        apiStatus={isResolvingLive && !playerVideoId && isCurrentlyLive ? 'loading' : (isCurrentlyLive ? 'live' : 'offline')}
                         muted={false}
                       />
                   </div>
@@ -251,10 +333,10 @@ export function StreamPageContent({ streamId }: { streamId: string }) {
                               <h3 className="text-[10px] font-black uppercase tracking-[0.3em] text-purple-500 flex items-center gap-2">
                                   <Info className="h-4 w-4" /> Información
                               </h3>
-                              {liveStatus.status === 'live' && (
+                              {isCurrentlyLive && realViewerCount > 0 && (
                                   <div className="flex items-center bg-red-600/20 border border-red-600/40 px-3 py-1 rounded-full text-red-500 font-black text-[9px] uppercase tracking-widest animate-pulse">
                                       <Users className="h-3 w-3 mr-2 fill-red-500" />
-                                      <span>{liveStatus.viewerCount ? new Intl.NumberFormat('es-ES', { notation: 'compact' }).format(liveStatus.viewerCount) : 'VIVO'}</span>
+                                      <span>{formatViewerCount(realViewerCount)} espectadores</span>
                                   </div>
                               )}
                           </div>

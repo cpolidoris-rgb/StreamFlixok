@@ -5,7 +5,7 @@ import { useMemo, useState } from 'react';
 import { Radio, MonitorOff, Zap, Loader2 } from 'lucide-react';
 import Image from 'next/image';
 import WebRTCPlayer from './webrtc-player';
-import { findMasterChannel } from '@/lib/stream-catalog';
+import { findMasterChannel, cleanLiveVideoId } from '@/lib/stream-catalog';
 
 interface StreamPlayerProps {
   stream: Stream;
@@ -17,8 +17,8 @@ interface StreamPlayerProps {
 
 /**
  * MOTOR DE REPRODUCCIÓN PROFESIONAL (ALTA DISPONIBILIDAD)
- * Intenta cargar el video si existe un ID, incluso si la API de estado está en duda.
- * Solo muestra "Fuera de Aire" si el estado es explícitamente 'offline' y no hay ID forzado.
+ * Reproduce la transmisión en vivo activa verificada.
+ * Si el canal está fuera de aire o no transmite en directo, muestra la placa oficial sin emitir programas viejos grabados.
  */
 export default function StreamPlayer({ 
   stream, 
@@ -27,7 +27,6 @@ export default function StreamPlayer({
   apiStatus = 'live',
   muted = false // Audio habilitado por defecto
 }: StreamPlayerProps) {
-  const [forceChannelStream, setForceChannelStream] = useState(false);
   const platform = (stream.platform || 'YouTube').toLowerCase();
   const RED_FILTER = { filter: 'invert(18%) sepia(100%) saturate(7413%) hue-rotate(359deg) brightness(101%) contrast(120%)' };
 
@@ -38,39 +37,46 @@ export default function StreamPlayer({
     const isMutedBool = muted ? 'true' : 'false';
 
     if (platform === 'youtube') {
-      const channelId = stream.platformChannelId || findMasterChannel(stream)?.platformChannelId;
-
-      if (forceChannelStream && channelId && channelId.startsWith('UC')) {
-        return `https://www.youtube.com/embed/live_stream?channel=${channelId}&autoplay=1&mute=${isMutedParam}&enablejsapi=1`;
+      // Si el estado es explícitamente offline o el canal no está en vivo, no cargar videos viejos
+      if (apiStatus === 'offline' || isLive === false) {
+        // Solo reproducir si hay un video en vivo descubierto explícitamente en este momento
+        if (!discoveredVideoId) {
+          return null;
+        }
       }
 
       let videoIdToUse = '';
 
-      // PRIORIDAD: Video detectado por API -> Video manual en DB -> URL de respaldo -> Catálogo Maestro
-      if (discoveredVideoId && discoveredVideoId.length === 11) {
-        videoIdToUse = discoveredVideoId;
-      } else if (stream.liveVideoId && stream.liveVideoId.length === 11) {
-        videoIdToUse = stream.liveVideoId;
-      } else if (stream.streamUrl?.includes('v=')) {
+      // PRIORIDAD 1: Video en vivo descubierto en tiempo real
+      if (discoveredVideoId && cleanLiveVideoId(discoveredVideoId)) {
+        videoIdToUse = cleanLiveVideoId(discoveredVideoId);
+      } 
+      // PRIORIDAD 2: Video ID en vivo válido y limpio del stream (solo si el canal está activo)
+      else if (isLive && stream.liveVideoId && cleanLiveVideoId(stream.liveVideoId)) {
+        videoIdToUse = cleanLiveVideoId(stream.liveVideoId);
+      } 
+      // PRIORIDAD 3: URL con v= limpio (solo si el canal está activo)
+      else if (isLive && stream.streamUrl?.includes('v=')) {
         const match = stream.streamUrl.match(/v=([a-zA-Z0-9_-]{11})/);
-        if (match) videoIdToUse = match[1];
-      }
-
-      if (!videoIdToUse) {
-        const master = findMasterChannel(stream);
-        if (master?.liveVideoId && master.liveVideoId.length === 11) {
-          videoIdToUse = master.liveVideoId;
+        if (match && cleanLiveVideoId(match[1])) {
+          videoIdToUse = cleanLiveVideoId(match[1]);
         }
       }
 
+      // Si tenemos un video ID en vivo legítimo, emitir en alta definición
       if (videoIdToUse) {
-        // Mute=0 habilita el sonido
         return `https://www.youtube.com/embed/${videoIdToUse}?autoplay=1&mute=${isMutedParam}&rel=0&showinfo=0&modestbranding=1&enablejsapi=1`;
       }
 
-      if (channelId && channelId.startsWith('UC')) {
-        return `https://www.youtube.com/embed/live_stream?channel=${channelId}&autoplay=1&mute=${isMutedParam}&enablejsapi=1`;
+      // PRIORIDAD 4: Si no hay video ID específico pero el canal está en vivo y tiene channelId (UC...):
+      // YouTube live_stream reproduce la emisión en vivo directa del canal
+      const master = findMasterChannel(stream);
+      const chId = stream.platformChannelId || master?.platformChannelId;
+      if (isLive && chId && chId.startsWith('UC') && apiStatus !== 'offline') {
+        return `https://www.youtube.com/embed/live_stream?channel=${chId}&autoplay=1&mute=${isMutedParam}&rel=0&enablejsapi=1`;
       }
+
+      return null;
     }
 
     if (platform === 'twitch') {
@@ -89,7 +95,7 @@ export default function StreamPlayer({
     }
 
     return null;
-  }, [stream, discoveredVideoId, platform, muted, forceChannelStream]);
+  }, [stream, discoveredVideoId, isLive, apiStatus, platform, muted]);
 
   // ESTADO 1: CARGANDO (Solo si no tenemos una URL que cargar todavía)
   if (apiStatus === 'loading' && !embedUrl) {
@@ -100,7 +106,7 @@ export default function StreamPlayer({
             <Loader2 className="h-10 w-10 text-primary animate-spin" />
         </div>
         <h3 className="text-xl font-black text-white uppercase tracking-widest mb-2 italic">
-          Sincronizando...
+          Sincronizando señal en vivo...
         </h3>
         <p className="text-zinc-500 text-[10px] uppercase font-bold tracking-[0.2em]">
           Estableciendo conexión con {stream.streamer}
@@ -109,8 +115,8 @@ export default function StreamPlayer({
     );
   }
 
-  // ESTADO 2: FUERA DE AIRE (PLACA STREAMFLIX)
-  const showOfflinePlate = (apiStatus === 'offline' && !stream.liveVideoId) || !embedUrl;
+  // ESTADO 2: FUERA DE AIRE (PLACA STREAMFLIX - NUNCA PROGRAMAS VIEJOS)
+  const showOfflinePlate = (apiStatus === 'offline' || !isLive || !embedUrl);
 
   if (showOfflinePlate) {
     return (
@@ -191,20 +197,6 @@ export default function StreamPlayer({
           className="border-0 bg-black w-full h-full shadow-2xl"
           title={`${stream.streamer} Live Player`}
         />
-      )}
-
-      {/* Selector de señal alternativa para YouTube */}
-      {platform === 'youtube' && (stream.platformChannelId || findMasterChannel(stream)?.platformChannelId) && (
-        <div className="absolute top-3 right-3 z-20 pointer-events-auto">
-          <button
-            onClick={() => setForceChannelStream(prev => !prev)}
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-black/70 hover:bg-black/90 border border-white/20 text-white/90 hover:text-white text-[10px] font-black uppercase tracking-wider backdrop-blur-md shadow-lg transition-all"
-            title="Alternar entre transmisión directa y señal en vivo del canal"
-          >
-            <Radio className="w-2.5 h-2.5 text-red-500 animate-pulse" />
-            <span>{forceChannelStream ? 'Señal: Canal Directo' : 'Alternar Señal'}</span>
-          </button>
-        </div>
       )}
     </div>
   );

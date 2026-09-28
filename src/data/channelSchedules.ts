@@ -246,32 +246,107 @@ export const CHANNEL_SCHEDULES: Record<string, Program[]> = {
   ]
 };
 
+export function normalizeChannelKey(channelId: string): string {
+  if (!channelId) return '';
+  const lower = channelId.toLowerCase().replace(/[-_]/g, '');
+  if (lower.includes('luzu')) return 'luzu-tv';
+  if (lower.includes('olga')) return 'olga-envivo';
+  if (lower.includes('blender')) return 'blender-oficial';
+  if (lower.includes('gelatina')) return 'gelatina-canal';
+  if (lower.includes('bondi')) return 'bondi-live';
+  if (lower.includes('tn') || lower.includes('todonoticias')) return 'tn-noticias';
+  if (lower.includes('c5n')) return 'c5n-vivo';
+  if (lower.includes('nacion') || lower.includes('ln')) return 'lanacion-mas';
+  if (lower.includes('cronica')) return 'cronica-tv';
+  if (lower.includes('telefe')) return 'telefe-canal';
+  if (lower.includes('trece')) return 'eltrece-canal';
+  if (lower.includes('publica') || lower.includes('tvp')) return 'tv-publica';
+  if (lower.includes('tyc')) return 'tyc-sports';
+  if (lower.includes('espn')) return 'espn-argentina';
+  if (lower.includes('urbana')) return 'urbana-play';
+  if (lower.includes('vorterix')) return 'vorterix-oficial';
+  if (lower.includes('luquitas') || lower.includes('parenla') || lower.includes('rodriguez')) return 'luquitas-rodriguez';
+  if (lower.includes('spreen')) return 'spreen-stream';
+  if (lower.includes('a24')) return 'a24_live';
+  if (lower.includes('america')) return 'america_live';
+  if (lower.includes('26')) return 'c26_live';
+  if (lower.includes('nueve')) return 'elnueve_live';
+  if (lower.includes('carajo')) return 'carajo_live';
+  if (lower.includes('neura')) return 'neura_live';
+  if (lower.includes('republicaz')) return 'republicaz_live';
+  if (lower.includes('mitre')) return 'mitre_live';
+  if (lower.includes('la100')) return 'la100_live';
+  return channelId;
+}
+
 export const CHANNEL_NUMBERS: Record<string, number> = {
   'luzu-tv': 10,
+  'luzu_live': 10,
   'olga-envivo': 11,
+  'olga_live': 11,
   'blender-oficial': 12,
+  'blender_live': 12,
   'gelatina-canal': 13,
+  'gelatina_live': 13,
   'bondi-live': 14,
+  'bondi_live': 14,
+  'neura_live': 15,
+  'carajo_live': 16,
+  'republicaz_live': 17,
+  'urbana-play': 18,
+  'urbanaplay_live': 18,
+  'vorterix-oficial': 19,
+  'vorterix_live': 19,
   'tn-noticias': 20,
+  'tn_live': 20,
   'c5n-vivo': 21,
+  'c5n_live': 21,
   'lanacion-mas': 22,
+  'ln_live': 22,
   'cronica-tv': 23,
+  'cronica_live': 23,
+  'a24_live': 24,
+  'c26_live': 25,
+  'ip_live': 26,
+  'net_live': 27,
   'telefe-canal': 30,
+  'telefe_live': 30,
   'eltrece-canal': 31,
-  'tv-publica': 32,
+  'eltrece_live': 31,
+  'america_live': 32,
+  'elnueve_live': 33,
+  'tv-publica': 34,
+  'tvpublica_live': 34,
   'tyc-sports': 40,
+  'tycsports_live': 40,
   'espn-argentina': 41,
-  'urbana-play': 50,
-  'vorterix-oficial': 51,
+  'espn_live': 41,
+  'dsports_live': 42,
+  'mitre_live': 50,
+  'la100_live': 51,
+  'aspen_live': 52,
+  'radioconvos_live': 53,
+  'rockandpop_live': 54,
   'luquitas-rodriguez': 60,
+  'parenlamano_live': 60,
   'spreen-stream': 61,
+  'spreen_live': 61,
+  'davoo_live': 62,
+  'coscu_live': 63,
+  'lacobra_live': 64,
+  'momo_live': 65,
+  'joaco_live': 66,
+  'pimpe_live': 67,
+  'santutu_live': 68,
+  'markito_live': 69,
 };
 
 /**
  * Obtener la grilla de un canal específico
  */
 export function getChannelSchedule(streamId: string): Program[] {
-  return CHANNEL_SCHEDULES[streamId] || [];
+  const normalizedKey = normalizeChannelKey(streamId);
+  return CHANNEL_SCHEDULES[normalizedKey] || CHANNEL_SCHEDULES[streamId] || [];
 }
 
 /**
@@ -299,7 +374,8 @@ export function minutesToTime(minutes: number): string {
  * rellenando automáticamente cualquier hueco como en Flow.
  */
 export function getFilledDaySchedule(channelId: string, day: DayOfWeek, channelName = 'Canal'): Program[] {
-  const rawPrograms = (CHANNEL_SCHEDULES[channelId] || []).filter(p => p.dayOfWeek === day);
+  const normalizedKey = normalizeChannelKey(channelId);
+  const rawPrograms = (CHANNEL_SCHEDULES[normalizedKey] || CHANNEL_SCHEDULES[channelId] || []).filter(p => p.dayOfWeek === day);
   
   if (rawPrograms.length === 0) {
     // Si el canal no emite programas en vivo específicos este día, mostrar bloque continuo

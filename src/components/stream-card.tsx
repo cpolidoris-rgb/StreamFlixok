@@ -13,7 +13,7 @@ import { useDoc } from '@/firebase/firestore/use-doc';
 import { doc, updateDoc, arrayUnion, arrayRemove } from 'firebase/firestore';
 import { cn } from '@/lib/utils';
 
-import { enrichStream, isStreamLive } from '@/lib/stream-catalog';
+import { enrichStream, isChannelCurrentlyLive, getRealtimeViewerCount, formatViewerCount } from '@/lib/stream-catalog';
 
 const FALLBACK_IMAGE = 'https://images.unsplash.com/photo-1598488035139-bdbb2231ce04?auto=format&fit=crop&w=1200&q=80';
 
@@ -31,8 +31,9 @@ export default function StreamCard({ stream: rawStream, rank }: { stream: Stream
   const isFavorite = !!userProfile?.favorites?.includes(stream.id);
   const thumbUrl = stream.thumbnailUrl || (stream as any).thumbnail || (stream as any).coverUrl || (stream as any).imageUrl || (stream as any).image || (stream as any).posterUrl || FALLBACK_IMAGE;
 
-  // Determinar con certeza si el canal está dando señal en vivo
-  const isCurrentlyLive = isStreamLive(stream);
+  // Determinar con certeza si el canal está dando señal en vivo en este momento
+  const isCurrentlyLive = isChannelCurrentlyLive(stream);
+  const viewerCount = getRealtimeViewerCount(stream);
 
   const handleToggleFavorite = async (e: React.MouseEvent) => {
     e.preventDefault();
@@ -105,10 +106,10 @@ export default function StreamCard({ stream: rawStream, rank }: { stream: Stream
             </button>
             
             {/* GENTE CONECTADA VIENDO - SOLO PARA CANALES QUE ESTÁN EN VIVO EN ESE MOMENTO */}
-            {isCurrentlyLive && (
+            {isCurrentlyLive && viewerCount > 0 && (
               <div className="absolute bottom-3 left-3 flex items-center bg-black/90 backdrop-blur-xl px-2.5 py-1 rounded-md text-[9px] font-black text-white z-10 border border-white/5 shadow-2xl">
                   <Users className="h-2.5 w-2.5 mr-1.5 text-primary fill-primary" />
-                  <span>{stream.viewerCount ? new Intl.NumberFormat('es-ES', { notation: 'compact' }).format(stream.viewerCount) : 'LIVE'}</span>
+                  <span>{formatViewerCount(viewerCount)} espectadores</span>
               </div>
             )}
           </Link>

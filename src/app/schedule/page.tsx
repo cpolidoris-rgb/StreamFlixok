@@ -19,12 +19,16 @@ import {
   X,
   Volume2,
   Share2,
-  Bookmark
+  Bookmark,
+  Users
 } from 'lucide-react';
 import AppHeader from '@/components/app-header';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { DEFAULT_STREAMS } from '@/data/defaultStreams';
+import { useFirestore, useMemoFirebase } from '@/firebase/provider';
+import { useCollection } from '@/firebase/firestore/use-collection';
+import { collection } from 'firebase/firestore';
 import {
   DAYS_OF_WEEK,
   DayOfWeek,
@@ -35,6 +39,12 @@ import {
 } from '@/data/channelSchedules';
 import type { Stream, Program } from '@/lib/data';
 import { cn } from '@/lib/utils';
+import {
+  enrichStream,
+  isChannelCurrentlyLive,
+  getRealtimeViewerCount,
+  formatViewerCount
+} from '@/lib/stream-catalog';
 
 const CATEGORIES = ['Todos', 'Streaming', 'TV Noticias', 'TV Abierta', 'Deportes', 'Radio', 'Streamers'];
 
@@ -51,6 +61,13 @@ const TIME_SLOTS = Array.from({ length: 48 }, (_, i) => {
 });
 
 export default function SchedulePage() {
+  const firestore = useFirestore();
+  const channelsQuery = useMemoFirebase(
+    () => (firestore ? collection(firestore, 'streams') : null),
+    [firestore]
+  );
+  const { data: allRawStreams } = useCollection<Stream>(channelsQuery);
+
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('Todos');
   const [selectedDay, setSelectedDay] = useState<DayOfWeek>('Lunes');
@@ -72,6 +89,14 @@ export default function SchedulePage() {
 
   const timelineContainerRef = useRef<HTMLDivElement>(null);
   const hasAutoScrolled = useRef(false);
+
+  // Canales base: obtenidos de Firestore (las mismas tarjetas del home) o fallback
+  const baseStreams = useMemo(() => {
+    if (allRawStreams && allRawStreams.length > 0) {
+      return allRawStreams.filter(s => s && s.status !== 'rejected').map(enrichStream);
+    }
+    return DEFAULT_STREAMS.map(enrichStream);
+  }, [allRawStreams]);
 
   // Reloj en tiempo real
   useEffect(() => {
@@ -98,23 +123,28 @@ export default function SchedulePage() {
     setSelectedDay(currentDay);
   }, [currentDay]);
 
-  // Canales filtrados por categoría y búsqueda
+  // Canales filtrados por categoría y búsqueda, ordenados por número de canal oficial
   const filteredStreams = useMemo(() => {
-    return DEFAULT_STREAMS.filter((s) => {
-      if (selectedCategory !== 'Todos' && s.category !== selectedCategory) {
-        return false;
-      }
-      if (searchQuery.trim()) {
-        const q = searchQuery.toLowerCase().trim();
-        const matchChannel = s.streamer.toLowerCase().includes(q) || s.title.toLowerCase().includes(q);
-        // También buscar en los títulos de programas de este canal
-        const fullDay = getFilledDaySchedule(s.id, selectedDay, s.streamer);
-        const matchProgram = fullDay.some(p => p.title.toLowerCase().includes(q) || p.description.toLowerCase().includes(q));
-        if (!matchChannel && !matchProgram) return false;
-      }
-      return true;
-    });
-  }, [selectedCategory, searchQuery, selectedDay]);
+    return baseStreams
+      .filter((s) => {
+        if (selectedCategory !== 'Todos' && s.category !== selectedCategory) {
+          return false;
+        }
+        if (searchQuery.trim()) {
+          const q = searchQuery.toLowerCase().trim();
+          const matchChannel = s.streamer.toLowerCase().includes(q) || s.title.toLowerCase().includes(q);
+          const fullDay = getFilledDaySchedule(s.id, selectedDay, s.streamer);
+          const matchProgram = fullDay.some(p => p.title.toLowerCase().includes(q) || p.description.toLowerCase().includes(q));
+          if (!matchChannel && !matchProgram) return false;
+        }
+        return true;
+      })
+      .sort((a, b) => {
+        const numA = CHANNEL_NUMBERS[a.id] || 999;
+        const numB = CHANNEL_NUMBERS[b.id] || 999;
+        return numA - numB;
+      });
+  }, [baseStreams, selectedCategory, searchQuery, selectedDay]);
 
   // Centrar la línea de tiempo en el horario actual
   const scrollToCurrentTime = (behavior: ScrollBehavior = 'smooth') => {
@@ -124,8 +154,8 @@ export default function SchedulePage() {
     const timePx = currentMinutes * pxPerMin;
     // Ancho del contenedor para centrar la línea
     const containerWidth = timelineContainerRef.current.clientWidth;
-    // Ancho de la columna izquierda de canales (220px)
-    const channelColWidth = 220;
+    // Ancho de la columna izquierda de canales (280px con tarjeta del canal)
+    const channelColWidth = 280;
     const targetScroll = Math.max(0, timePx - (containerWidth - channelColWidth) / 2);
     timelineContainerRef.current.scrollTo({ left: targetScroll, behavior });
   };
@@ -312,7 +342,7 @@ export default function SchedulePage() {
           {/* BOTONES FLOTANTES DE NAVEGACIÓN HORIZONTAL */}
           <button
             onClick={() => handleScrollByHours(-2)}
-            className="absolute left-[230px] top-1/2 -translate-y-1/2 z-40 w-9 h-14 bg-black/80 hover:bg-[#00d2ff] hover:text-black border border-white/20 rounded-r-xl flex items-center justify-center text-white transition-all backdrop-blur-md shadow-xl"
+            className="absolute left-[290px] top-1/2 -translate-y-1/2 z-40 w-9 h-14 bg-black/80 hover:bg-[#00d2ff] hover:text-black border border-white/20 rounded-r-xl flex items-center justify-center text-white transition-all backdrop-blur-md shadow-xl"
             title="Retroceder 2 horas"
           >
             <ChevronLeft className="w-5 h-5" />
@@ -331,17 +361,17 @@ export default function SchedulePage() {
             ref={timelineContainerRef}
             className="overflow-x-auto overflow-y-auto max-h-[72vh] scrollbar-thin scrollbar-thumb-white/20 scrollbar-track-black"
           >
-            <div className="relative" style={{ width: `${220 + totalTimelineWidth}px` }}>
+            <div className="relative" style={{ width: `${280 + totalTimelineWidth}px` }}>
 
               {/* LÍNEA DE TIEMPO EN VIVO (BARRA ROJA VERTICAL DE AHORA) */}
               {isToday && (
                 <div
                   className="absolute top-0 bottom-0 z-30 pointer-events-none transition-all duration-1000"
-                  style={{ left: `${220 + currentMinutes * zoomLevel}px` }}
+                  style={{ left: `${280 + currentMinutes * zoomLevel}px` }}
                 >
                   {/* Marcador superior con la hora actual */}
                   <div className="sticky top-0 -translate-x-1/2 z-40">
-                    <div className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-600 text-white font-black text-[9px] uppercase tracking-wider shadow-[0_0_15px_rgba(239,68,68,0.9)] border border-red-400">
+                    <div className="flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-red-600 text-white font-black text-[9px] uppercase tracking-wider shadow-[0_0_15px_rgba(239,68,68,0.9)] border border-red-400">
                       <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping" />
                       <span>{currentTimeStr} hs</span>
                     </div>
@@ -356,9 +386,9 @@ export default function SchedulePage() {
               <div className="sticky top-0 z-20 flex bg-[#0c0e17] border-b border-white/10 shadow-md">
                 
                 {/* ESQUINA SUPERIOR IZQUIERDA (STICKY TOP Y LEFT) */}
-                <div className="sticky left-0 z-30 w-[220px] min-w-[220px] h-12 bg-[#0c0e17] border-r border-white/10 flex items-center justify-between px-4">
+                <div className="sticky left-0 z-30 w-[280px] min-w-[280px] h-12 bg-[#0c0e17] border-r border-white/10 flex items-center justify-between px-4">
                   <span className="text-[10px] font-black uppercase tracking-[0.2em] text-[#00d2ff]">
-                    CANAL
+                    CANAL / SEÑAL
                   </span>
                   <span className="text-[9px] font-bold uppercase text-zinc-500">
                     HORARIO
@@ -397,70 +427,108 @@ export default function SchedulePage() {
 
               {/* LISTA DE FILAS DE CANALES */}
               <div className="divide-y divide-white/5">
-                {filteredStreams.map((stream) => {
+                {filteredStreams.map((rawStream) => {
+                  const stream = enrichStream(rawStream);
                   const channelNumber = CHANNEL_NUMBERS[stream.id] || 99;
                   const programs = getFilledDaySchedule(stream.id, selectedDay, stream.streamer);
+                  const isChannelLive = isChannelCurrentlyLive(stream);
+                  const realViewerCount = getRealtimeViewerCount(stream);
 
                   return (
                     <div key={stream.id} className="flex group/row hover:bg-white/[0.02] transition-colors relative">
                       
-                      {/* COLUMNA IZQUIERDA FIJA: IDENTIDAD DEL CANAL */}
-                      <div className="sticky left-0 z-10 w-[220px] min-w-[220px] h-20 bg-[#090b12] border-r border-white/10 flex items-center justify-between px-3 gap-2.5 shadow-lg group-hover/row:bg-[#0e111a] transition-colors">
+                      {/* COLUMNA IZQUIERDA FIJA: IDENTIDAD DEL CANAL (CON LOGO OFICIAL DE LA TARJETA DEL HOME) */}
+                      <div className="sticky left-0 z-10 w-[280px] min-w-[280px] h-24 bg-[#090b12] border-r border-white/10 flex items-center justify-between px-3 gap-3 shadow-xl group-hover/row:bg-[#0e111a] transition-colors">
                         
-                        {/* NÚMERO DE CANAL ESTILO FLOW */}
-                        <div className="text-center shrink-0 w-8">
-                          <span className="text-sm font-black font-mono text-[#00d2ff]">
-                            {channelNumber}
-                          </span>
-                        </div>
+                        {/* TARJETA CON LOGO DEL CANAL OBTENIDO DEL HOME */}
+                        {(() => {
+                          const logoUrl = stream.thumbnailUrl || (stream as any).thumbnail || (stream as any).coverUrl || (stream as any).imageUrl || (stream as any).image || (stream as any).posterUrl;
 
-                        {/* MINIATURA DEL CANAL */}
-                        <div className="relative w-11 h-11 rounded-xl overflow-hidden bg-black border border-white/10 shrink-0">
-                          {stream.thumbnailUrl ? (
-                            <Image
-                              src={stream.thumbnailUrl}
-                              alt={stream.streamer}
-                              fill
-                              className="object-cover"
-                              unoptimized
-                            />
-                          ) : (
-                            <div className="w-full h-full flex items-center justify-center bg-zinc-900 text-[9px] font-black text-white">
-                              {stream.streamer.slice(0, 2)}
-                            </div>
-                          )}
-                        </div>
+                          return (
+                            <Link 
+                              href={`/stream/${stream.id}`}
+                              className="group/card relative w-24 sm:w-28 aspect-[16/9] rounded-lg overflow-hidden bg-black/90 border border-white/15 shrink-0 shadow-md group-hover/row:border-[#00d2ff]/60 group-hover/row:scale-[1.03] transition-all flex items-center justify-center"
+                              title={`Ver ${stream.streamer} en vivo`}
+                            >
+                              {logoUrl ? (
+                                <Image
+                                  src={logoUrl}
+                                  alt={stream.streamer}
+                                  fill
+                                  className="object-contain p-1 transition-transform duration-300 group-hover/card:scale-105"
+                                  unoptimized
+                                />
+                              ) : (
+                                <div className="w-full h-full flex items-center justify-center bg-zinc-900 text-xs font-black text-white">
+                                  {stream.streamer.slice(0, 3)}
+                                </div>
+                              )}
+                              
+                              {/* NÚMERO DE CANAL */}
+                              <div className="absolute top-1 left-1 bg-black/85 backdrop-blur-md text-[#00d2ff] font-mono font-black text-[8px] px-1 rounded border border-white/10 shadow-sm z-10">
+                                CH {channelNumber}
+                              </div>
 
-                        {/* NOMBRE Y CATEGORÍA */}
-                        <div className="flex-1 min-w-0">
-                          <h3 className="text-xs font-black uppercase tracking-tight text-white truncate group-hover/row:text-[#00d2ff] transition-colors">
-                            {stream.streamer}
-                          </h3>
+                              {/* ETIQUETA VIVO SOLO PARA CANALES QUE TIENEN TRANSMISIÓN EN VIVO EN ESE MOMENTO */}
+                              {isChannelLive && (
+                                <div className="absolute top-1 right-1 bg-red-600 text-white font-black text-[7px] uppercase tracking-widest px-1 py-0.2 rounded shadow-sm animate-pulse z-10">
+                                  VIVO
+                                </div>
+                              )}
+
+                              {/* USUARIOS REALES QUE ESTÁN VIENDO CADA CANAL */}
+                              {isChannelLive && realViewerCount > 0 && (
+                                <div className="absolute bottom-1 left-1 bg-black/90 backdrop-blur-md text-white font-black text-[7px] px-1 py-0.2 rounded flex items-center gap-0.5 border border-white/5 z-10">
+                                  <Users className="w-2 h-2 text-red-500 fill-red-500" />
+                                  <span>{formatViewerCount(realViewerCount)}</span>
+                                </div>
+                              )}
+                            </Link>
+                          );
+                        })()}
+
+                        {/* NOMBRE, CATEGORÍA Y ESTADO DE AUDIENCIA */}
+                        <div className="flex-1 min-w-0 pr-1">
+                          <Link href={`/stream/${stream.id}`}>
+                            <h3 className="text-xs font-black uppercase tracking-tight text-white truncate group-hover/row:text-[#00d2ff] transition-colors">
+                              {stream.streamer}
+                            </h3>
+                          </Link>
                           <span className="text-[9px] font-bold uppercase tracking-wider text-zinc-400 block truncate">
                             {stream.category}
                           </span>
+                          {isChannelLive ? (
+                            <div className="flex items-center gap-1 text-[9px] font-bold text-red-400 mt-1">
+                              <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-ping inline-block" />
+                              <span className="font-mono">{formatViewerCount(realViewerCount)} viendo</span>
+                            </div>
+                          ) : (
+                            <span className="text-[9px] font-medium text-zinc-500 mt-1 block">
+                              Fuera de aire
+                            </span>
+                          )}
                         </div>
 
-                        {/* BOTÓN PLAY RÁPIDO */}
+                        {/* BOTÓN PLAY DIRECTO */}
                         <Link
                           href={`/stream/${stream.id}`}
-                          className="w-7 h-7 rounded-lg bg-white/5 hover:bg-red-600 text-white flex items-center justify-center transition-all opacity-0 group-hover/row:opacity-100 shrink-0 shadow-md"
-                          title={`Ver ${stream.streamer} en vivo`}
+                          className="w-8 h-8 rounded-lg bg-white/5 hover:bg-red-600 text-white flex items-center justify-center transition-all opacity-0 group-hover/row:opacity-100 shrink-0 shadow-lg"
+                          title={`Ver ${stream.streamer} en directo`}
                         >
-                          <Play className="w-3 h-3 fill-current ml-0.5" />
+                          <Play className="w-3.5 h-3.5 fill-current ml-0.5" />
                         </Link>
                       </div>
 
                       {/* TRACK DE PROGRAMAS (BLOQUES CON ANCHO PROPORCIONAL A LA DURACIÓN) */}
-                      <div className="flex relative h-20" style={{ width: `${totalTimelineWidth}px` }}>
+                      <div className="flex relative h-24" style={{ width: `${totalTimelineWidth}px` }}>
                         {programs.map((program) => {
                           const startMin = timeToMinutes(program.startTime);
                           const endMin = timeToMinutes(program.endTime || '24:00');
                           const durationMin = Math.max(15, endMin - startMin);
                           const widthPx = durationMin * zoomLevel;
 
-                          // Calcular si está actualmente en el aire
-                          const isLiveNow = isToday && currentMinutes >= startMin && currentMinutes < endMin;
+                          // ETIQUETA VIVO SOLO SI EL CANAL ESTÁ EN VIVO Y ESTE PROGRAMA ESTÁ EN CURSO HOY
+                          const isLiveNow = isToday && isChannelLive && currentMinutes >= startMin && currentMinutes < endMin;
                           
                           // Progreso transcurrido
                           const progressPercent = isLiveNow
@@ -558,18 +626,23 @@ export default function SchedulePage() {
             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
               
               <div className="flex items-center gap-4 min-w-0">
-                {/* LOGO CANAL */}
-                <div className="relative w-14 h-14 rounded-xl overflow-hidden bg-black border border-white/20 shrink-0">
+                {/* LOGO OFICIAL DEL CANAL OBTENIDO DEL HOME */}
+                <div className="relative w-28 sm:w-32 aspect-[16/9] rounded-xl overflow-hidden bg-black/90 border border-white/20 shrink-0 shadow-lg flex items-center justify-center">
                   <Image
-                    src={activeProgram.stream.thumbnailUrl}
+                    src={activeProgram.stream.thumbnailUrl || (activeProgram.stream as any).thumbnail || (activeProgram.stream as any).coverUrl || (activeProgram.stream as any).imageUrl || 'https://inforosario.com/logostream.png'}
                     alt={activeProgram.stream.streamer}
                     fill
-                    className="object-cover"
+                    className="object-contain p-1.5"
                     unoptimized
                   />
-                  <div className="absolute top-1 left-1 bg-[#00d2ff] text-black font-black text-[9px] px-1 rounded font-mono">
+                  <div className="absolute top-1 left-1 bg-[#00d2ff] text-black font-black text-[9px] px-1 rounded font-mono z-10">
                     CH {activeProgram.channelNumber}
                   </div>
+                  {activeProgram.isLive && (
+                    <div className="absolute top-1 right-1 bg-red-600 text-white font-black text-[8px] px-1 rounded uppercase animate-pulse">
+                      VIVO
+                    </div>
+                  )}
                 </div>
 
                 {/* DETALLES DEL PROGRAMA */}
@@ -582,9 +655,14 @@ export default function SchedulePage() {
                     <span className="text-[11px] font-bold text-zinc-300 font-mono">
                       {activeProgram.program.startTime} a {activeProgram.program.endTime} hs
                     </span>
-                    {activeProgram.isLive && (
-                      <span className="px-2 py-0.5 rounded-full bg-red-600 text-white font-black text-[8px] uppercase tracking-widest animate-pulse">
-                        EN VIVO AHORA
+                    {activeProgram.isLive ? (
+                      <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-600 text-white font-black text-[8px] uppercase tracking-widest animate-pulse">
+                        <Users className="w-2.5 h-2.5 fill-current" />
+                        <span>EN DIRECTO • {formatViewerCount(getRealtimeViewerCount(activeProgram.stream))} espectadores</span>
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded-full bg-white/10 text-zinc-400 font-bold text-[8px] uppercase tracking-wider">
+                        TRANSMISIÓN NO DISPONIBLE EN VIVO
                       </span>
                     )}
                   </div>
@@ -606,7 +684,7 @@ export default function SchedulePage() {
                   className="flex-1 sm:flex-initial flex items-center justify-center gap-2 px-6 py-3 rounded-xl bg-red-600 hover:bg-red-500 text-white font-black text-xs uppercase tracking-wider shadow-lg shadow-red-600/30 transition-all active:scale-95"
                 >
                   <Play className="w-3.5 h-3.5 fill-current" />
-                  <span>{activeProgram.isLive ? 'VER EN VIVO' : 'IR AL CANAL'}</span>
+                  <span>{activeProgram.isLive ? 'VER EN DIRECTO' : 'IR AL CANAL'}</span>
                 </Link>
 
                 <button
