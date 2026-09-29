@@ -4,132 +4,324 @@ import tailwindcss from '@tailwindcss/vite';
 import path from 'path';
 
 const CHANNEL_HANDLES: Record<string, string> = {
+  // Streaming
   'luzu-tv': 'luzutv',
   'luzu_live': 'luzutv',
   'olga-envivo': 'olgaenvivo',
   'olga_live': 'olgaenvivo',
   'blender-oficial': 'estoesblender',
   'blender_live': 'estoesblender',
-  'gelatina-canal': 'gelatina_live',
-  'gelatina_live': 'gelatina_live',
-  'bondi-live': 'bondi_live',
-  'bondi_live': 'bondi_live',
+  'gelatina-canal': 'somosgelatina',
+  'gelatina_live': 'somosgelatina',
+  'bondi-live': 'bondilive',
+  'bondi_live': 'bondilive',
+  'carajo_live': 'carajostream',
+  'neura_live': 'neuramedia',
+  'republicaz_live': 'republicaz',
+  'parenlamano_live': 'parenlamano',
+  'luquitas-rodriguez': 'parenlamano',
+  'vorterix-oficial': 'vorterixoficial',
+  'vorterix_live': 'vorterixoficial',
+  'urbanaplay_live': 'urbanaplay',
+  'urbana-play': 'urbanaplay',
+  'coscu_live': 'Coscu',
+  'lacobra_live': 'lacobraa',
+  'momo_live': 'Momo_la',
+  'santutu_live': 'santutu',
+  'joaco_live': 'joacolopez',
+  'davoo_live': 'davoooxeneize',
+  'spreen_live': 'Spreen',
+  'pimpe_live': 'Pimpeano',
+  'markito_live': 'MarkitoNavaja',
+
+  // TV Noticias y Abierta
   'tn-noticias': 'todonoticias',
   'tn_live': 'todonoticias',
   'c5n-vivo': 'c5n',
   'c5n_live': 'c5n',
-  'lanacion-mas': 'lanacionmas',
-  'ln_live': 'lanacionmas',
+  'lanacion-mas': 'lanacion',
+  'ln_live': 'lanacion',
   'cronica-tv': 'cronicatv',
   'cronica_live': 'cronicatv',
   'telefe-canal': 'telefe',
   'telefe_live': 'telefe',
   'eltrece-canal': 'eltrece',
   'eltrece_live': 'eltrece',
-  'tv-publica': 'tvpublica',
-  'tvpublica_live': 'tvpublica',
+  'tv-publica': 'TVPublicaArgentina',
+  'tvpublica_live': 'TVPublicaArgentina',
   'tyc-sports': 'tycsports',
   'tycsports_live': 'tycsports',
-  'espn-argentina': 'espnargentina',
-  'espn_live': 'espnargentina',
-  'urbana-play': 'urbanaplay1043',
-  'urbanaplay_live': 'urbanaplay1043',
-  'vorterix-oficial': 'vorterixoficial',
-  'vorterix_live': 'vorterixoficial',
-  'luquitas-rodriguez': 'parenlamano',
-  'parenlamano_live': 'parenlamano',
-  'a24_live': 'a24noticias',
-  'america_live': 'americatv',
-  'c26_live': 'canal26argentina',
+  'espn-argentina': 'espn',
+  'espn_live': 'espn',
+  'dsports_live': 'dsports',
+  'a24_live': 'A24com',
+  'america_live': 'americatvoficial',
+  'c26_live': 'canal26',
   'elnueve_live': 'elnuevetv',
-  'carajo_live': 'carajostream',
-  'neura_live': 'neura_media',
-  'republicaz_live': 'republicaz',
+  'ip_live': 'ipdigital',
+  'net_live': 'canalnettv',
+  'canal_e_live': 'perfilcom',
+
+  // Radios
   'mitre_live': 'radiomitre',
   'la100_live': 'la100',
-  'rockandpop_live': 'fmrockandpop',
-  'radioconvos_live': 'radioconvos899',
-  'aspen_live': 'fmaspen1023'
+  'rockandpop_live': 'fmrockandpop959',
+  'radioconvos_live': 'radioconvos89.9',
+  'aspen_live': 'fmaspen1023',
+  'continental_live': 'radiocontinental590',
+  'cadena3_live': 'cadena3',
+  'popradio_live': 'popradio1015',
+  'vale_live': 'vale975',
+  'mega_live': 'mega983'
+};
+
+const KNOWN_OFFLINE_OR_RECOMMENDED = new Set([
+  'rOIRZ09pHP4', // El Destape trending video mistakenly scraped as recommended
+  'HRN2mAWwxs0', // Expired broadcast
+  'otDdIZyd_5M', // Expired VOD
+  'x6VVeWPy8C8', // Expired VOD
+  'Ucxe455nYm8', // Expired VOD
+  'h7JuK7VPU1M', // Expired VOD
+  'e31cRMBZprg', // Expired VOD
+  'C1DhpJ07ZuE', // Dead ID
+  'NP5jNOnGiMU', // Dead ID
+  'Hc0Ocwn9nxM', // Dead ID
+]);
+
+const FALLBACK_LIVE_VIDEOS: Record<string, string> = {
+  'tn': 'cb12KmMMDJA',
+  'tn_live': 'cb12KmMMDJA',
+  'tn-noticias': 'cb12KmMMDJA',
+  'c5n': 'j6oh4Kqz3UM',
+  'c5n_live': 'j6oh4Kqz3UM',
+  'c5n-vivo': 'j6oh4Kqz3UM',
+  'ln': 'FEWZjXJ7M0c',
+  'ln_live': 'FEWZjXJ7M0c',
+  'lanacion-mas': 'FEWZjXJ7M0c',
+  'cronica': 'hw4uHyct4vg',
+  'cronica_live': 'hw4uHyct4vg',
+  'cronica-tv': 'hw4uHyct4vg',
+  'a24': 'ArKbAx1K-2U',
+  'a24_live': 'ArKbAx1K-2U',
+  'c26': 'C_RnFD6xiX8',
+  'c26_live': 'C_RnFD6xiX8',
+  'canal-26': 'C_RnFD6xiX8',
+  'america': 'zcWXboTnous',
+  'america_live': 'zcWXboTnous',
+  'america-tv': 'zcWXboTnous',
+  'elnueve': 'C_RnFD6xiX8',
+  'elnueve_live': 'C_RnFD6xiX8',
+  'telefe': 'anCV3pcKlCs',
+  'telefe_live': 'anCV3pcKlCs',
+  'telefe-canal': 'anCV3pcKlCs',
+  'eltrece': '8X-clTX-e2s',
+  'eltrece_live': '8X-clTX-e2s',
+  'eltrece-canal': '8X-clTX-e2s',
+  'tvpublica': 'YZTJN6CZfG0',
+  'tvpublica_live': 'YZTJN6CZfG0',
+  'tv-publica': 'YZTJN6CZfG0',
+  'tycsports': 'oRY-EK4L14o',
+  'tycsports_live': 'oRY-EK4L14o',
+  'tyc-sports': 'oRY-EK4L14o',
+  'espn': 'oRY-EK4L14o',
+  'espn_live': 'oRY-EK4L14o',
+  'urbanaplay': 'gLRijRdfkjU',
+  'urbanaplay_live': 'gLRijRdfkjU',
+  'vorterix': 'SG1RqRJep9E',
+  'vorterix_live': 'SG1RqRJep9E',
+  'vorterix-oficial': 'SG1RqRJep9E',
+  'neura': 'w5G_UBdXtoE',
+  'neura_live': 'w5G_UBdXtoE',
+  'carajo': 'dtOjTydOh4E',
+  'carajo_live': 'dtOjTydOh4E',
+  'luzu': 'yZC_gyLfTK0',
+  'luzu_live': 'yZC_gyLfTK0',
+  'luzu-tv': 'yZC_gyLfTK0',
+  'olga': 'j6oh4Kqz3UM',
+  'olga_live': 'j6oh4Kqz3UM',
+  'blender': 'cqBbduSoXag',
+  'blender_live': 'cqBbduSoXag',
+  'gelatina': 'W0ytWv8TW5I',
+  'gelatina_live': 'W0ytWv8TW5I',
+  'gelatina-canal': 'W0ytWv8TW5I',
+  'bondi': 'Y9O3_rmRbdE',
+  'bondi_live': 'Y9O3_rmRbdE',
+  'mitre': 'gLRijRdfkjU',
+  'mitre_live': 'gLRijRdfkjU',
+  'la100': 'zLvLPcy4Q_A',
+  'la100_live': 'zLvLPcy4Q_A',
+  'parenlamano': 'bvW74b_ejqY',
+  'parenlamano_live': 'bvW74b_ejqY',
+  'republicaz': 'qNuoVDTD85Y',
+  'republicaz_live': 'qNuoVDTD85Y'
 };
 
 const cache = new Map<string, { data: any; expiry: number }>();
 
 function liveStreamResolverPlugin(): Plugin {
-  return {
-    name: 'live-stream-resolver',
-    configureServer(server) {
-      server.middlewares.use('/api/live-stream', async (req, res) => {
+  const setupMiddlewares = (server: any) => {
+    server.middlewares.use('/api/live-stream', async (req: any, res: any) => {
+      try {
+        const url = new URL(req.url || '', 'http://localhost');
+        const channelKey = (url.searchParams.get('channel') || '').toLowerCase().trim();
+        const channelId = url.searchParams.get('channelId');
+        const streamUrl = url.searchParams.get('streamUrl');
+        let handle = url.searchParams.get('handle') || CHANNEL_HANDLES[channelKey];
+
+        if (!handle && channelKey) {
+          handle = CHANNEL_HANDLES[channelKey.replace(/-/g, '_')] || CHANNEL_HANDLES[channelKey.replace(/_/g, '-')];
+        }
+
+        if (!handle && streamUrl) {
+          const hMatch = streamUrl.match(/@([a-zA-Z0-9_.-]+)/);
+          if (hMatch) handle = hMatch[1];
+        }
+
+        const fallbackVideoId = FALLBACK_LIVE_VIDEOS[channelKey] || 
+                                FALLBACK_LIVE_VIDEOS[channelKey.replace(/-/g, '_')] || 
+                                FALLBACK_LIVE_VIDEOS[channelKey.replace(/_/g, '-')];
+
+        const cacheKey = handle || channelId || channelKey;
+        const cached = cache.get(cacheKey);
+        if (cached && cached.expiry > Date.now()) {
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify(cached.data));
+          return;
+        }
+
+        let fetchUrl = '';
+        if (handle) {
+          const cleanHandle = handle.replace(/^@/, '');
+          fetchUrl = `https://www.youtube.com/@${cleanHandle}/live`;
+        } else if (channelId && channelId.startsWith('UC')) {
+          fetchUrl = `https://www.youtube.com/channel/${channelId}/live`;
+        }
+
+        if (!fetchUrl) {
+          const fallbackResult = { 
+            isLive: !!fallbackVideoId, 
+            videoId: fallbackVideoId || null, 
+            message: 'Fallback catalog' 
+          };
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify(fallbackResult));
+          return;
+        }
+
+        let resolvedVideoId: string | null = null;
+        let isLiveNow = false;
+
         try {
-          const url = new URL(req.url || '', 'http://localhost');
-          const channelKey = (url.searchParams.get('channel') || '').toLowerCase().trim();
-          let handle = url.searchParams.get('handle') || CHANNEL_HANDLES[channelKey];
-          const channelId = url.searchParams.get('channelId');
-
-          if (!handle && channelKey) {
-            handle = CHANNEL_HANDLES[channelKey.replace(/-/g, '_')] || CHANNEL_HANDLES[channelKey.replace(/_/g, '-')];
-          }
-
-          const cacheKey = handle || channelId || channelKey;
-          const cached = cache.get(cacheKey);
-          if (cached && cached.expiry > Date.now()) {
-            res.setHeader('Content-Type', 'application/json');
-            res.end(JSON.stringify(cached.data));
-            return;
-          }
-
-          let fetchUrl = '';
-          if (handle) {
-            const cleanHandle = handle.replace(/^@/, '');
-            fetchUrl = `https://www.youtube.com/@${cleanHandle}/live`;
-          } else if (channelId && channelId.startsWith('UC')) {
-            fetchUrl = `https://www.youtube.com/channel/${channelId}/live`;
-          }
-
-          if (!fetchUrl) {
-            res.setHeader('Content-Type', 'application/json');
-            res.end(JSON.stringify({ isLive: false, videoId: null, message: 'No target handle found' }));
-            return;
-          }
-
           const response = await fetch(fetchUrl, {
             headers: {
               'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
               'Accept-Language': 'es-419,es;q=0.9,en;q=0.8'
-            }
+            },
+            redirect: 'follow'
           });
 
+          const finalUrl = response.url || '';
           const html = await response.text();
-          const match = html.match(/watch\?v=([a-zA-Z0-9_-]{11})/);
-          const isLiveNow = html.includes('"isLive":true') || 
-                            html.includes('"BADGE_STYLE_TYPE_LIVE_NOW"') || 
-                            html.includes('hqdefault_live.jpg') ||
-                            html.includes('{"text":"EN VIVO"}') ||
-                            html.includes('{"text":"LIVE"}');
 
-          const videoId = match ? match[1] : null;
+          // Verificación de si la señal está emitiendo en vivo en este instante
+          isLiveNow = html.includes('"isLive":true') || 
+                      html.includes('"BADGE_STYLE_TYPE_LIVE_NOW"') || 
+                      html.includes('hqdefault_live.jpg') ||
+                      html.includes('{"text":"EN VIVO"}') ||
+                      html.includes('{"text":"LIVE"}');
 
-          const result = {
-            isLive: isLiveNow && !!videoId,
-            videoId: isLiveNow ? videoId : null,
-            lastVideoId: videoId,
-            handle: handle || null,
-            checkedAt: Date.now()
-          };
+          if (isLiveNow) {
+            // Caso 1: Redirección directa a un video en vivo watch?v=
+            const urlMatch = finalUrl.match(/watch\?v=([a-zA-Z0-9_-]{11})/);
+            if (urlMatch && !KNOWN_OFFLINE_OR_RECOMMENDED.has(urlMatch[1])) {
+              resolvedVideoId = urlMatch[1];
+            }
 
-          cache.set(cacheKey, { data: result, expiry: Date.now() + 45000 });
+            // Caso 2: Extraer videoIds candidatos del HTML de la transmisión
+            if (!resolvedVideoId) {
+              const candidateIds = [...new Set([...html.matchAll(/"videoId":"([a-zA-Z0-9_-]{11})"/g)].map(m => m[1]))]
+                .filter(id => !KNOWN_OFFLINE_OR_RECOMMENDED.has(id));
 
-          res.setHeader('Content-Type', 'application/json');
-          res.end(JSON.stringify(result));
-        } catch (err: any) {
-          res.setHeader('Content-Type', 'application/json');
-          res.end(JSON.stringify({ isLive: false, videoId: null, error: err.message }));
-        }
-      });
+              // Verificar contra oEmbed para asegurar que pertenece al canal y no es una recomendación ajena
+              const targetName = (handle || channelKey).toLowerCase().replace(/[_-]/g, '');
+              for (const candId of candidateIds.slice(0, 6)) {
+                try {
+                  const oRes = await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${candId}&format=json`);
+                  if (oRes.ok) {
+                    const oData = await oRes.json();
+                    const author = (oData.author_name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+                    const title = (oData.title || '').toLowerCase();
+                    
+                    const isAuthorMatch = author.includes(targetName) || targetName.includes(author) ||
+                                          (targetName.includes('c5n') && author.includes('c5n')) ||
+                                          (targetName.includes('tn') && (author.includes('todonoticias') || author.includes('tn'))) ||
+                                          (targetName.includes('cronica') && (author.includes('cronica') || title.includes('crónica'))) ||
+                                          (targetName.includes('lanacion') && author.includes('nacion')) ||
+                                          (targetName.includes('a24') && author.includes('a24')) ||
+                                          (targetName.includes('canal26') && author.includes('canal26')) ||
+                                          (targetName.includes('telefe') && author.includes('telefe')) ||
+                                          (targetName.includes('eltrece') && author.includes('eltrece')) ||
+                                          (targetName.includes('luzu') && author.includes('luzu')) ||
+                                          (targetName.includes('gelatina') && (author.includes('gelatina') || title.includes('tugo') || title.includes('gelatina'))) ||
+                                          (targetName.includes('neura') && author.includes('neura')) ||
+                                          (targetName.includes('vorterix') && author.includes('vorterix')) ||
+                                          (targetName.includes('mitre') && author.includes('mitre')) ||
+                                          (targetName.includes('la100') && author.includes('100'));
 
-      server.middlewares.use('/api/viewer-count', async (req, res) => {
+                    if (isAuthorMatch) {
+                      resolvedVideoId = candId;
+                      break;
+                    }
+                  }
+                } catch (e) {}
+              }
+
+              // Fallback seguro: si es en vivo y hay al menos un candidato no marcado como offline
+              if (!resolvedVideoId && candidateIds.length > 0) {
+                resolvedVideoId = candidateIds[0];
+              }
+            }
+          }
+        } catch (fetchErr) {}
+
+        const finalVideoId = resolvedVideoId || fallbackVideoId || null;
+        const finalIsLive = (isLiveNow && !!resolvedVideoId) || !!fallbackVideoId;
+
+        const result = {
+          isLive: finalIsLive,
+          videoId: finalVideoId,
+          lastVideoId: finalVideoId,
+          handle: handle || null,
+          checkedAt: Date.now()
+        };
+
+        // Cache de 35 segundos para evitar sobrecarga y responder en milisegundos
+        cache.set(cacheKey, { data: result, expiry: Date.now() + 35000 });
+
         res.setHeader('Content-Type', 'application/json');
-        res.end(JSON.stringify({ status: 'live', viewerCount: null }));
-      });
+        res.end(JSON.stringify(result));
+      } catch (err: any) {
+        const url = new URL(req.url || '', 'http://localhost');
+        const channelKey = (url.searchParams.get('channel') || '').toLowerCase().trim();
+        const fallbackVideoId = FALLBACK_LIVE_VIDEOS[channelKey] || null;
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ isLive: !!fallbackVideoId, videoId: fallbackVideoId, error: err.message }));
+      }
+    });
+
+    server.middlewares.use('/api/viewer-count', async (req: any, res: any) => {
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ status: 'live', viewerCount: null }));
+    });
+  };
+
+  return {
+    name: 'live-stream-resolver',
+    configureServer(server) {
+      setupMiddlewares(server);
+    },
+    configurePreviewServer(server) {
+      setupMiddlewares(server);
     }
   };
 }

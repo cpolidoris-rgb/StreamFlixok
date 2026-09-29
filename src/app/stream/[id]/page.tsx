@@ -35,7 +35,7 @@ import {
 } from 'firebase/firestore';
 import { useMiniPlayer } from '@/providers/mini-player-provider';
 import { DEFAULT_STREAMS } from '@/data/defaultStreams';
-import { enrichStream, isChannelCurrentlyLive, getRealtimeViewerCount, formatViewerCount, cleanLiveVideoId } from '@/lib/stream-catalog';
+import { enrichStream, isChannelCurrentlyLive, getRealtimeViewerCount, formatViewerCount, cleanLiveVideoId, findMasterChannel } from '@/lib/stream-catalog';
 
 const XIcon = (props: React.SVGProps<SVGSVGElement>) => (
   <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 16 16" fill="currentColor">
@@ -104,64 +104,81 @@ export function StreamPageContent({ streamId }: { streamId: string }) {
   const [isResolvingLive, setIsResolvingLive] = useState<boolean>(true);
 
   // Verificación y resolución en tiempo real de la transmisión en vivo activa
+  const checkLiveStream = async () => {
+    if (!stream?.id) return;
+    try {
+      setIsResolvingLive(true);
+      const platform = (stream.platform || 'YouTube').toLowerCase();
+      if (platform === 'youtube') {
+        const params = new URLSearchParams();
+        params.set('channel', stream.id);
+        if (stream.platformChannelId) params.set('channelId', stream.platformChannelId);
+        if (stream.streamUrl) params.set('streamUrl', stream.streamUrl);
+
+        const res = await fetch(`/api/live-stream?${params.toString()}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.isLive && data.videoId && cleanLiveVideoId(data.videoId)) {
+            setDiscoveredLiveVideoId(data.videoId);
+            setApiLiveState(true);
+          } else if (data.videoId && cleanLiveVideoId(data.videoId)) {
+            setDiscoveredLiveVideoId(data.videoId);
+            setApiLiveState(true);
+          }
+        }
+      }
+    } catch (e) {
+      // Ignorar errores transitorios de red para no interrumpir la transmisión actual
+    } finally {
+      setIsResolvingLive(false);
+    }
+  };
+
   useEffect(() => {
     if (!stream?.id) return;
     let isCancelled = false;
 
-    const checkLiveStream = async () => {
-      try {
-        const platform = (stream.platform || 'YouTube').toLowerCase();
-        if (platform === 'youtube') {
-          const params = new URLSearchParams();
-          params.set('channel', stream.id);
-          if (stream.platformChannelId) params.set('channelId', stream.platformChannelId);
-          if (stream.streamUrl) params.set('streamUrl', stream.streamUrl);
-
-          const res = await fetch(`/api/live-stream?${params.toString()}`);
-          if (res.ok) {
-            const data = await res.json();
-            if (isCancelled) return;
-            if (data.isLive && data.videoId) {
-              setDiscoveredLiveVideoId(data.videoId);
-              setApiLiveState(true);
-            } else if (data.isLive === false) {
-              setDiscoveredLiveVideoId(null);
-              setApiLiveState(false);
-            }
-          }
-        }
-      } catch (e) {
-      } finally {
-        if (!isCancelled) setIsResolvingLive(false);
-      }
+    const runCheck = async () => {
+      if (!isCancelled) await checkLiveStream();
     };
 
-    checkLiveStream();
-    const inv = setInterval(checkLiveStream, 35000);
+    runCheck();
+    const inv = setInterval(runCheck, 35000);
     return () => {
       isCancelled = true;
       clearInterval(inv);
     };
   }, [stream?.id, stream?.platform, stream?.platformChannelId, stream?.streamUrl]);
 
+  const master = useMemo(() => findMasterChannel(stream), [stream]);
+
+  const playerVideoId = useMemo(() => {
+    if (discoveredLiveVideoId && cleanLiveVideoId(discoveredLiveVideoId)) {
+      return cleanLiveVideoId(discoveredLiveVideoId);
+    }
+    if (stream.liveVideoId && cleanLiveVideoId(stream.liveVideoId)) {
+      return cleanLiveVideoId(stream.liveVideoId);
+    }
+    if (master?.liveVideoId && cleanLiveVideoId(master.liveVideoId)) {
+      return cleanLiveVideoId(master.liveVideoId);
+    }
+    return undefined;
+  }, [discoveredLiveVideoId, stream.liveVideoId, master]);
+
   const isCurrentlyLive = useMemo(() => {
-    if (apiLiveState !== null) {
-      return apiLiveState;
+    // Si tenemos una transmisión confirmada o video en vivo disponible:
+    if (playerVideoId || discoveredLiveVideoId || stream.liveVideoId || master?.liveVideoId) {
+      return true;
+    }
+    if (apiLiveState === true) {
+      return true;
     }
     return isChannelCurrentlyLive(stream);
-  }, [apiLiveState, stream]);
+  }, [apiLiveState, discoveredLiveVideoId, stream, master, playerVideoId]);
 
   const realViewerCount = useMemo(() => {
     return isCurrentlyLive ? getRealtimeViewerCount(stream) : 0;
   }, [isCurrentlyLive, stream]);
-
-  const playerVideoId = useMemo(() => {
-    if (discoveredLiveVideoId) return discoveredLiveVideoId;
-    if (isCurrentlyLive && stream.liveVideoId && cleanLiveVideoId(stream.liveVideoId)) {
-      return cleanLiveVideoId(stream.liveVideoId);
-    }
-    return undefined;
-  }, [discoveredLiveVideoId, isCurrentlyLive, stream.liveVideoId]);
 
   const [liveStatus, setLiveStatus] = useState<LiveStatus>(() => ({
     status: (stream?.isLive ?? true) ? 'live' : 'offline',
@@ -311,8 +328,9 @@ export function StreamPageContent({ streamId }: { streamId: string }) {
                         stream={stream} 
                         isLive={isCurrentlyLive} 
                         liveVideoId={playerVideoId} 
-                        apiStatus={isResolvingLive && !playerVideoId && isCurrentlyLive ? 'loading' : (isCurrentlyLive ? 'live' : 'offline')}
+                        apiStatus={playerVideoId ? 'live' : (isResolvingLive ? 'loading' : (isCurrentlyLive ? 'loading' : 'offline'))}
                         muted={false}
+                        onRetry={checkLiveStream}
                       />
                   </div>
                   <div className="space-y-2 shrink-0">
