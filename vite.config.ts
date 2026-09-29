@@ -7,8 +7,9 @@ const CHANNEL_HANDLES: Record<string, string> = {
   // Streaming
   'luzu-tv': 'luzutv',
   'luzu_live': 'luzutv',
-  'olga-envivo': 'olgaenvivo',
-  'olga_live': 'olgaenvivo',
+  'olga-envivo': 'olgaenvivo_',
+  'olga_live': 'olgaenvivo_',
+  'olga': 'olgaenvivo_',
   'blender-oficial': 'estoesblender',
   'blender_live': 'estoesblender',
   'gelatina-canal': 'somosgelatina',
@@ -137,8 +138,9 @@ const FALLBACK_LIVE_VIDEOS: Record<string, string> = {
   'luzu': 'yZC_gyLfTK0',
   'luzu_live': 'yZC_gyLfTK0',
   'luzu-tv': 'yZC_gyLfTK0',
-  'olga': 'j6oh4Kqz3UM',
-  'olga_live': 'j6oh4Kqz3UM',
+  'olga': 'VGlJeNF6tQ8',
+  'olga_live': 'VGlJeNF6tQ8',
+  'olga-envivo': 'VGlJeNF6tQ8',
   'blender': 'cqBbduSoXag',
   'blender_live': 'cqBbduSoXag',
   'gelatina': 'W0ytWv8TW5I',
@@ -157,6 +159,50 @@ const FALLBACK_LIVE_VIDEOS: Record<string, string> = {
 };
 
 const cache = new Map<string, { data: any; expiry: number }>();
+
+interface ServerStudioBroadcast {
+  id: string;
+  title: string;
+  streamer: string;
+  category: string;
+  description: string;
+  thumbnailUrl: string;
+  platform: 'WebRTC';
+  isWebRTC: true;
+  broadcastType: 'studio_webrtc';
+  isLive: true;
+  situation: 'live';
+  viewerCount: number;
+  startedAt: number;
+  lastHeartbeat: number;
+}
+
+interface ServerViewerSession {
+  viewerId: string;
+  viewerOffer?: any;
+  hostAnswer?: any;
+  hostCandidates: any[];
+  viewerCandidates: any[];
+  connectedAt: number;
+  lastSeen: number;
+}
+
+const studioBroadcasts = new Map<string, ServerStudioBroadcast>();
+const studioViewerSessions = new Map<string, Map<string, ServerViewerSession>>();
+
+function parseJsonBody(req: any): Promise<any> {
+  return new Promise((resolve) => {
+    let data = '';
+    req.on('data', (chunk: any) => { data += chunk; });
+    req.on('end', () => {
+      try {
+        resolve(data ? JSON.parse(data) : {});
+      } catch (e) {
+        resolve({});
+      }
+    });
+  });
+}
 
 function liveStreamResolverPlugin(): Plugin {
   const setupMiddlewares = (server: any) => {
@@ -261,6 +307,7 @@ function liveStreamResolverPlugin(): Plugin {
                                           (targetName.includes('canal26') && author.includes('canal26')) ||
                                           (targetName.includes('telefe') && author.includes('telefe')) ||
                                           (targetName.includes('eltrece') && author.includes('eltrece')) ||
+                                          (targetName.includes('olga') && (author.includes('olga') || title.includes('olga'))) ||
                                           (targetName.includes('luzu') && author.includes('luzu')) ||
                                           (targetName.includes('gelatina') && (author.includes('gelatina') || title.includes('tugo') || title.includes('gelatina'))) ||
                                           (targetName.includes('neura') && author.includes('neura')) ||
@@ -312,6 +359,186 @@ function liveStreamResolverPlugin(): Plugin {
     server.middlewares.use('/api/viewer-count', async (req: any, res: any) => {
       res.setHeader('Content-Type', 'application/json');
       res.end(JSON.stringify({ status: 'live', viewerCount: null }));
+    });
+
+    // ==========================================
+    // ESTUDIO Y SEÑALIZACIÓN WEBRTC EN TIEMPO REAL
+    // ==========================================
+    server.middlewares.use('/api/studio/start', async (req: any, res: any) => {
+      if (req.method !== 'POST') { res.statusCode = 405; return res.end(); }
+      const body = await parseJsonBody(req);
+      const id = body.id || 'studio_' + Date.now();
+      const broadcast: ServerStudioBroadcast = {
+        id,
+        title: body.title || 'Transmisión en Vivo desde el Estudio',
+        streamer: body.streamer || 'Conductor StreamFLIX',
+        category: body.category || 'Streaming',
+        description: body.description || '',
+        thumbnailUrl: body.thumbnailUrl || 'https://images.unsplash.com/photo-1598488035139-bdbb2231ce04?auto=format&fit=crop&w=1200&q=80',
+        platform: 'WebRTC',
+        isWebRTC: true,
+        broadcastType: 'studio_webrtc',
+        isLive: true,
+        situation: 'live',
+        viewerCount: 1,
+        startedAt: Date.now(),
+        lastHeartbeat: Date.now()
+      };
+      studioBroadcasts.set(id, broadcast);
+      if (!studioViewerSessions.has(id)) {
+        studioViewerSessions.set(id, new Map());
+      }
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ success: true, broadcast }));
+    });
+
+    server.middlewares.use('/api/studio/heartbeat', async (req: any, res: any) => {
+      if (req.method !== 'POST') { res.statusCode = 405; return res.end(); }
+      const body = await parseJsonBody(req);
+      const b = studioBroadcasts.get(body.broadcastId);
+      if (b) {
+        b.lastHeartbeat = Date.now();
+      }
+      const viewers = studioViewerSessions.get(body.broadcastId)?.size || 1;
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ success: true, viewersCount: Math.max(1, viewers) }));
+    });
+
+    server.middlewares.use('/api/studio/stop', async (req: any, res: any) => {
+      if (req.method !== 'POST') { res.statusCode = 405; return res.end(); }
+      const body = await parseJsonBody(req);
+      studioBroadcasts.delete(body.broadcastId);
+      studioViewerSessions.delete(body.broadcastId);
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ success: true }));
+    });
+
+    server.middlewares.use('/api/studio/active', async (req: any, res: any) => {
+      const now = Date.now();
+      for (const [id, b] of studioBroadcasts.entries()) {
+        if (now - b.lastHeartbeat > 35000) {
+          studioBroadcasts.delete(id);
+          studioViewerSessions.delete(id);
+        }
+      }
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ broadcasts: Array.from(studioBroadcasts.values()) }));
+    });
+
+    server.middlewares.use('/api/studio/stream', async (req: any, res: any) => {
+      const url = new URL(req.url || '', 'http://localhost');
+      const id = url.searchParams.get('id') || '';
+      const b = studioBroadcasts.get(id);
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ broadcast: b || null }));
+    });
+
+    server.middlewares.use('/api/webrtc/viewer-offer', async (req: any, res: any) => {
+      if (req.method !== 'POST') { res.statusCode = 405; return res.end(); }
+      const body = await parseJsonBody(req);
+      const { broadcastId, viewerId, offer } = body;
+      let sessions = studioViewerSessions.get(broadcastId);
+      if (!sessions) {
+        sessions = new Map();
+        studioViewerSessions.set(broadcastId, sessions);
+      }
+      sessions.set(viewerId, {
+        viewerId,
+        viewerOffer: offer,
+        hostAnswer: null,
+        hostCandidates: [],
+        viewerCandidates: [],
+        connectedAt: Date.now(),
+        lastSeen: Date.now()
+      });
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ success: true }));
+    });
+
+    server.middlewares.use('/api/webrtc/broadcaster-poll', async (req: any, res: any) => {
+      const url = new URL(req.url || '', 'http://localhost');
+      const broadcastId = url.searchParams.get('broadcastId') || '';
+      const sessions = studioViewerSessions.get(broadcastId);
+      const offers: any[] = [];
+      if (sessions) {
+        for (const [vId, session] of sessions.entries()) {
+          if (session.viewerOffer && !session.hostAnswer) {
+            offers.push({ viewerId: vId, offer: session.viewerOffer });
+          }
+        }
+      }
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ offers }));
+    });
+
+    server.middlewares.use('/api/webrtc/host-answer', async (req: any, res: any) => {
+      if (req.method !== 'POST') { res.statusCode = 405; return res.end(); }
+      const body = await parseJsonBody(req);
+      const { broadcastId, viewerId, answer } = body;
+      const sessions = studioViewerSessions.get(broadcastId);
+      if (sessions && sessions.has(viewerId)) {
+        sessions.get(viewerId)!.hostAnswer = answer;
+      }
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ success: true }));
+    });
+
+    server.middlewares.use('/api/webrtc/viewer-poll', async (req: any, res: any) => {
+      const url = new URL(req.url || '', 'http://localhost');
+      const broadcastId = url.searchParams.get('broadcastId') || '';
+      const viewerId = url.searchParams.get('viewerId') || '';
+      const sessions = studioViewerSessions.get(broadcastId);
+      const session = sessions?.get(viewerId);
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ answer: session?.hostAnswer || null }));
+    });
+
+    server.middlewares.use('/api/webrtc/candidate', async (req: any, res: any) => {
+      if (req.method !== 'POST') { res.statusCode = 405; return res.end(); }
+      const body = await parseJsonBody(req);
+      const { broadcastId, viewerId, sender, candidate } = body;
+      const sessions = studioViewerSessions.get(broadcastId);
+      const session = sessions?.get(viewerId);
+      if (session && candidate) {
+        if (sender === 'host') {
+          session.hostCandidates.push(candidate);
+        } else {
+          session.viewerCandidates.push(candidate);
+        }
+      }
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ success: true }));
+    });
+
+    server.middlewares.use('/api/webrtc/candidates', async (req: any, res: any) => {
+      const url = new URL(req.url || '', 'http://localhost');
+      const broadcastId = url.searchParams.get('broadcastId') || '';
+      const viewerId = url.searchParams.get('viewerId') || '';
+      const recipient = url.searchParams.get('recipient') || '';
+      const sessions = studioViewerSessions.get(broadcastId);
+      const session = sessions?.get(viewerId);
+      let candidates: any[] = [];
+      if (session) {
+        if (recipient === 'viewer') {
+          candidates = session.hostCandidates.splice(0);
+        } else if (recipient === 'host') {
+          candidates = session.viewerCandidates.splice(0);
+        }
+      }
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ candidates }));
+    });
+
+    server.middlewares.use('/api/webrtc/viewer-disconnect', async (req: any, res: any) => {
+      if (req.method !== 'POST') { res.statusCode = 405; return res.end(); }
+      const body = await parseJsonBody(req);
+      const { broadcastId, viewerId } = body;
+      const sessions = studioViewerSessions.get(broadcastId);
+      if (sessions) {
+        sessions.delete(viewerId);
+      }
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ success: true }));
     });
   };
 

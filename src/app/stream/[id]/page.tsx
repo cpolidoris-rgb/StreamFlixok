@@ -36,6 +36,7 @@ import {
 import { useMiniPlayer } from '@/providers/mini-player-provider';
 import { DEFAULT_STREAMS } from '@/data/defaultStreams';
 import { enrichStream, isChannelCurrentlyLive, getRealtimeViewerCount, formatViewerCount, cleanLiveVideoId, findMasterChannel } from '@/lib/stream-catalog';
+import { getStudioBroadcast } from '@/lib/studio-service';
 
 const XIcon = (props: React.SVGProps<SVGSVGElement>) => (
   <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 16 16" fill="currentColor">
@@ -64,14 +65,25 @@ export function StreamPageContent({ streamId }: { streamId: string }) {
   );
   
   const { data: rawStream, isLoading: isStreamLoading } = useDoc<Stream>(streamRef);
+  const [studioStream, setStudioStream] = useState<Stream | null>(null);
+
+  useEffect(() => {
+    if (streamId) {
+      getStudioBroadcast(streamId).then((res) => {
+        if (res) setStudioStream(res);
+      });
+    }
+  }, [streamId]);
+
   const fallback = useMemo(() => {
     return DEFAULT_STREAMS.find(s => s.id === streamId) || ({ id: streamId } as Stream);
   }, [streamId]);
 
   const stream = useMemo(() => {
+    if (studioStream) return enrichStream(studioStream);
     if (rawStream) return enrichStream(rawStream);
     return enrichStream(fallback);
-  }, [rawStream, fallback]);
+  }, [studioStream, rawStream, fallback]);
 
   // Si al entrar a la página este canal estaba en el mini player, cerramos la minipantalla
   useEffect(() => {
@@ -166,6 +178,10 @@ export function StreamPageContent({ streamId }: { streamId: string }) {
   }, [discoveredLiveVideoId, stream.liveVideoId, master]);
 
   const isCurrentlyLive = useMemo(() => {
+    // Si es una transmisión WebRTC del estudio en vivo
+    if (stream.isWebRTC || stream.broadcastType === 'studio_webrtc') {
+      return stream.situation !== 'offline';
+    }
     // Si tenemos una transmisión confirmada o video en vivo disponible:
     if (playerVideoId || discoveredLiveVideoId || stream.liveVideoId || master?.liveVideoId) {
       return true;
@@ -328,7 +344,7 @@ export function StreamPageContent({ streamId }: { streamId: string }) {
                         stream={stream} 
                         isLive={isCurrentlyLive} 
                         liveVideoId={playerVideoId} 
-                        apiStatus={playerVideoId ? 'live' : (isResolvingLive ? 'loading' : (isCurrentlyLive ? 'loading' : 'offline'))}
+                        apiStatus={(stream.isWebRTC || stream.broadcastType === 'studio_webrtc') ? (isCurrentlyLive ? 'live' : 'offline') : (playerVideoId ? 'live' : (isResolvingLive ? 'loading' : (isCurrentlyLive ? 'loading' : 'offline')))}
                         muted={false}
                         onRetry={checkLiveStream}
                       />

@@ -2,7 +2,7 @@
 
 import AppHeader from '@/components/app-header';
 import StreamCard from '@/components/stream-card';
-import { useMemo, useState, Suspense } from 'react';
+import { useMemo, useState, useEffect, Suspense } from 'react';
 import { useFirestore, useMemoFirebase } from '@/firebase/provider';
 import { useCollection } from '@/firebase/firestore/use-collection';
 import type { Stream, UserProfile } from '@/lib/data';
@@ -13,6 +13,7 @@ import { useDoc } from '@/firebase/firestore/use-doc';
 import { TrendingUp, AlertTriangle, ArrowRight } from 'lucide-react';
 import HeroBanner from '@/components/hero-banner';
 import { enrichStream } from '@/lib/stream-catalog';
+import { getActiveStudioBroadcasts } from '@/lib/studio-service';
 
 const CATEGORIES = ['Streaming', 'TV Noticias', 'TV Abierta', 'Deportes', 'Radio', 'Streamers'];
 
@@ -34,8 +35,32 @@ export function HomeContent() {
   );
   const { data: allRawStreams, isLoading } = useCollection<Stream>(channelsQuery);
 
+  const [serverStudioBroadcasts, setServerStudioBroadcasts] = useState<Stream[]>([]);
+
+  useEffect(() => {
+    let isCancelled = false;
+    const fetchStudio = async () => {
+      const active = await getActiveStudioBroadcasts();
+      if (!isCancelled) {
+        setServerStudioBroadcasts(active);
+      }
+    };
+    fetchStudio();
+    const interval = setInterval(fetchStudio, 2500);
+    return () => {
+      isCancelled = true;
+      clearInterval(interval);
+    };
+  }, []);
+
   const streams = useMemo(() => {
-    if (!allRawStreams) return [];
+    const baseRaw = allRawStreams || [];
+    const combined = [...serverStudioBroadcasts];
+    for (const s of baseRaw) {
+      if (s && !combined.some(c => c.id === s.id)) {
+        combined.push(s);
+      }
+    }
     
     const isMaster = user?.uid === 'G4rbqD6D90PJPcjoAWnW2df77q13' ||
                      user?.uid === 'L3Y6K9bZ9FhoonRg7ngIZ2UNiR03' || 
@@ -44,11 +69,11 @@ export function HomeContent() {
                      user?.email === 'cpolidoris2@gmail.com' ||
                      user?.email === 'cpolidoris@gmail.com';
                      
-    if (isMaster) return allRawStreams.filter(Boolean).map(enrichStream);
+    if (isMaster) return combined.filter(Boolean).map(enrichStream);
     
     // Show all streams that are published or do not have a rejected status
-    return allRawStreams.filter(s => s && s.status !== 'rejected').map(enrichStream);
-  }, [allRawStreams, user?.uid, userProfile?.isAdmin, user?.email]);
+    return combined.filter(s => s && s.status !== 'rejected').map(enrichStream);
+  }, [allRawStreams, serverStudioBroadcasts, user?.uid, userProfile?.isAdmin, user?.email]);
 
   const dynamicCategories = useMemo(() => {
     const streamCats = Array.from(new Set(streams.map(s => s.category).filter(Boolean) as string[]));
@@ -63,6 +88,10 @@ export function HomeContent() {
 
   const uncategorizedStreams = useMemo(() => {
     return streams.filter(s => !s.category);
+  }, [streams]);
+
+  const webRTCStreams = useMemo(() => {
+    return streams.filter(s => s && (s.isWebRTC || s.broadcastType === 'studio_webrtc') && s.situation === 'live');
   }, [streams]);
 
   const featuredStreams = useMemo(() => {
@@ -88,6 +117,28 @@ export function HomeContent() {
         {/* CONTENEDOR PRINCIPAL */}
         <div className="max-w-[1800px] mx-auto px-6 md:px-12 mt-12 space-y-16 animate-in fade-in slide-in-from-bottom-2 duration-1000">
           
+          {/* TRANSMISIONES EN VIVO DEL ESTUDIO STREAMFLIX */}
+          {!searchQuery && webRTCStreams.length > 0 && (
+            <section className="bg-gradient-to-r from-red-950/60 via-zinc-950 to-zinc-900 border-2 border-red-600/50 rounded-3xl p-6 md:p-8 shadow-[0_0_40px_rgba(255,0,0,0.25)] space-y-6">
+              <div className="flex items-center justify-between border-b border-white/10 pb-4">
+                <div className="flex items-center gap-3">
+                  <span className="w-3.5 h-3.5 rounded-full bg-red-600 animate-ping" />
+                  <h2 className="text-xl md:text-2xl font-black font-headline uppercase italic tracking-tighter text-white">
+                    Estudio de Transmisión en Directo
+                  </h2>
+                </div>
+                <div className="bg-red-600 text-white font-black text-[9px] uppercase tracking-widest px-3 py-1 rounded-md shadow-lg animate-pulse">
+                  AL AIRE AHORA
+                </div>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-8">
+                {webRTCStreams.map((s) => (
+                  <StreamCard key={s.id} stream={s} />
+                ))}
+              </div>
+            </section>
+          )}
+
           {isLoading ? (
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-8">
               {Array.from({ length: 10 }).map((_, i) => <Skeleton key={i} className="aspect-video w-full rounded-2xl bg-white/5" />)}

@@ -3,16 +3,13 @@
 import React, { useEffect, useRef, useState } from 'react';
 import type { Stream } from '@/lib/data';
 import { RTC_CONFIG } from '@/lib/webrtc-config';
-import { useFirestore } from '@/firebase/provider';
 import {
-  doc,
-  setDoc,
-  onSnapshot,
-  collection,
-  addDoc,
-  serverTimestamp,
-  deleteDoc,
-} from 'firebase/firestore';
+  sendViewerOffer,
+  pollViewerAnswer,
+  sendCandidate,
+  getCandidates,
+  disconnectViewer,
+} from '@/lib/studio-service';
 import {
   Radio,
   Volume2,
@@ -31,7 +28,6 @@ interface WebRTCPlayerProps {
 }
 
 export default function WebRTCPlayer({ stream, streamId, muted = false }: WebRTCPlayerProps) {
-  const firestore = useFirestore();
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -45,16 +41,12 @@ export default function WebRTCPlayer({ stream, streamId, muted = false }: WebRTC
   const [streamStarted, setStreamStarted] = useState(false);
 
   useEffect(() => {
-    if (!firestore || !streamId) return;
+    if (!streamId) return;
 
     let isCancelled = false;
+    let pollInterval: any = null;
+    let candInterval: any = null;
     const viewerId = 'viewer_' + Math.random().toString(36).substring(2, 9) + '_' + Date.now();
-    const viewerDocRef = doc(firestore, 'streams', streamId, 'webrtc_viewers', viewerId);
-    const viewerCandidatesCol = collection(firestore, 'streams', streamId, 'webrtc_viewers', viewerId, 'viewer_candidates');
-    const hostCandidatesCol = collection(firestore, 'streams', streamId, 'webrtc_viewers', viewerId, 'host_candidates');
-
-    let unsubViewerDoc: (() => void) | null = null;
-    let unsubHostCandidates: (() => void) | null = null;
 
     const initViewer = async () => {
       try {
@@ -108,7 +100,7 @@ export default function WebRTCPlayer({ stream, streamId, muted = false }: WebRTC
         // ICE candidate collection from viewer
         pc.onicecandidate = (event) => {
           if (event.candidate && !isCancelled) {
-            addDoc(viewerCandidatesCol, event.candidate.toJSON()).catch(() => {});
+            sendCandidate(streamId, viewerId, 'viewer', event.candidate.toJSON());
           }
         };
 
@@ -121,54 +113,45 @@ export default function WebRTCPlayer({ stream, streamId, muted = false }: WebRTC
 
         if (isCancelled) return;
 
-        // Write offer to Firestore
-        await setDoc(viewerDocRef, {
-          viewerOffer: {
-            type: offer.type,
-            sdp: offer.sdp,
-          },
-          connectedAt: serverTimestamp(),
-          userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : '',
+        // Send offer to server signaling
+        await sendViewerOffer(streamId, viewerId, {
+          type: offer.type,
+          sdp: offer.sdp,
         });
 
-        // Listen for Host's answer
-        unsubViewerDoc = onSnapshot(viewerDocRef, async (snapshot) => {
-          if (isCancelled || !snapshot.exists()) return;
-          const data = snapshot.data();
-
-          if (data?.hostAnswer && pc.signalingState !== 'stable') {
+        // Poll for host's answer
+        pollInterval = setInterval(async () => {
+          if (isCancelled || (pc.signalingState as string) === 'stable') return;
+          const answer = await pollViewerAnswer(streamId, viewerId);
+          if (answer && (pc.signalingState as string) !== 'stable') {
             try {
-              const remoteDesc = new RTCSessionDescription(data.hostAnswer);
-              await pc.setRemoteDescription(remoteDesc);
+              await pc.setRemoteDescription(new RTCSessionDescription(answer));
+              clearInterval(pollInterval);
             } catch (err) {
-              console.warn('Error setting host answer:', err);
+              console.warn('Error setting host answer in viewer:', err);
             }
           }
-        });
+        }, 500);
 
-        // Listen for Host's ICE candidates
-        unsubHostCandidates = onSnapshot(hostCandidatesCol, (snapshot) => {
-          if (isCancelled) return;
-          snapshot.docChanges().forEach(async (change) => {
-            if (change.type === 'added') {
-              const candidateData = change.doc.data();
-              try {
-                if (pc.remoteDescription) {
-                  await pc.addIceCandidate(new RTCIceCandidate(candidateData));
-                }
-              } catch (e) {
-                // Ignore candidate errors if disconnected
+        // Poll for host's ICE candidates
+        candInterval = setInterval(async () => {
+          if (isCancelled || pc.connectionState === 'closed') return;
+          const hostCandidates = await getCandidates(streamId, viewerId, 'viewer');
+          for (const cand of hostCandidates) {
+            try {
+              if (pc.remoteDescription) {
+                await pc.addIceCandidate(new RTCIceCandidate(cand));
               }
-            }
-          });
-        });
+            } catch (e) {}
+          }
+        }, 500);
 
         // Timeout fallback if host is not active
         setTimeout(() => {
           if (!isCancelled && pc.connectionState !== 'connected' && !streamStarted) {
             setConnectionState((prev) => (prev === 'connecting' ? 'waiting_host' : prev));
           }
-        }, 10000);
+        }, 12000);
       } catch (err) {
         console.error('WebRTC viewer initialization failed:', err);
         if (!isCancelled) setConnectionState('failed');
@@ -179,15 +162,15 @@ export default function WebRTCPlayer({ stream, streamId, muted = false }: WebRTC
 
     return () => {
       isCancelled = true;
-      if (unsubViewerDoc) unsubViewerDoc();
-      if (unsubHostCandidates) unsubHostCandidates();
+      if (pollInterval) clearInterval(pollInterval);
+      if (candInterval) clearInterval(candInterval);
       if (pcRef.current) {
         pcRef.current.close();
         pcRef.current = null;
       }
-      deleteDoc(viewerDocRef).catch(() => {});
+      disconnectViewer(streamId, viewerId);
     };
-  }, [firestore, streamId]);
+  }, [streamId]);
 
   // Handle Unmute
   const toggleMute = () => {

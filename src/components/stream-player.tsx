@@ -34,6 +34,12 @@ export default function StreamPlayer({
   const platform = (stream.platform || 'YouTube').toLowerCase();
   const RED_FILTER = { filter: 'invert(18%) sepia(100%) saturate(7413%) hue-rotate(359deg) brightness(101%) contrast(120%)' };
 
+  // PRIORIDAD 1: EMISIÓN WEBRTC EN DIRECTO DESDE EL ESTUDIO
+  const isWebRTC = stream.isWebRTC || platform === 'webrtc' || stream.broadcastType === 'studio_webrtc';
+  if (isWebRTC) {
+    return <WebRTCPlayer stream={stream} streamId={stream.id} muted={muted} />;
+  }
+
   // Obtener enlace directo a YouTube o a su canal y datos maestros
   const master = useMemo(() => findMasterChannel(stream), [stream]);
 
@@ -215,12 +221,6 @@ export default function StreamPlayer({
         <div className="absolute bottom-0 left-0 right-0 h-1 bg-primary/20" />
       </div>
     );
-  }
-
-  // ESTADO 2.5: EMISIÓN WEBRTC EN DIRECTO DESDE EL ESTUDIO
-  const isWebRTC = stream.isWebRTC || platform === 'webrtc' || stream.broadcastType === 'studio_webrtc';
-  if (isWebRTC) {
-    return <WebRTCPlayer stream={stream} streamId={stream.id} muted={muted} />;
   }
 
   // ESTADO 3: EN VIVO (VIDEO DIRECTO O IFRAME DE ALTA DEFINICIÓN)

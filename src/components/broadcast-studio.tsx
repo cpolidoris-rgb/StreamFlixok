@@ -23,6 +23,7 @@ import {
   Sliders,
   Send,
   Camera,
+  Info,
 } from 'lucide-react';
 import AppHeader from './app-header';
 import { useUser } from '@/firebase/auth/use-user';
@@ -30,6 +31,16 @@ import { useFirestore } from '@/firebase/provider';
 import { collection, addDoc, serverTimestamp, doc, updateDoc, onSnapshot } from 'firebase/firestore';
 import { useToast } from '@/hooks/use-toast';
 import { RTC_CONFIG } from '@/lib/webrtc-config';
+import {
+  startStudioBroadcast,
+  sendStudioHeartbeat,
+  stopStudioBroadcast,
+  getActiveStudioBroadcasts,
+  pollBroadcasterOffers,
+  sendHostAnswer,
+  sendCandidate,
+  getCandidates,
+} from '@/lib/studio-service';
 
 export default function BroadcastStudio() {
   const { user } = useUser();
@@ -84,6 +95,34 @@ export default function BroadcastStudio() {
 
   // External Form submitted
   const [externalSubmitted, setExternalSubmitted] = useState(false);
+
+  // Active other studio broadcasts in progress
+  const [activeOtherBroadcast, setActiveOtherBroadcast] = useState<{ id: string; streamer: string; title: string; category: string } | null>(null);
+
+  useEffect(() => {
+    let isCancelled = false;
+    const checkActive = async () => {
+      const list = await getActiveStudioBroadcasts();
+      if (isCancelled) return;
+      const other = list.find((b) => b.id !== broadcastId && b.situation === 'live');
+      if (other) {
+        setActiveOtherBroadcast({
+          id: other.id,
+          streamer: other.streamer,
+          title: other.title,
+          category: other.category,
+        });
+      } else {
+        setActiveOtherBroadcast(null);
+      }
+    };
+    checkActive();
+    const interval = setInterval(checkActive, 2500);
+    return () => {
+      isCancelled = true;
+      clearInterval(interval);
+    };
+  }, [broadcastId]);
 
   // Sync user display name
   useEffect(() => {
@@ -330,34 +369,43 @@ export default function BroadcastStudio() {
     const snapshot = captureVideoSnapshot();
     setCapturedThumbnail(snapshot);
 
-    const newStreamData = {
+    const generatedId = 'studio_' + Date.now();
+
+    // 1. Guardar en el servidor de streaming WebRTC
+    const serverBroadcast = await startStudioBroadcast({
+      id: generatedId,
       title: formData.title.trim(),
       streamer: formData.streamer.trim(),
       category: formData.category,
       description: formData.description.trim() || 'Transmisión en vivo desde el Estudio StreamFLIX',
-      viewerCount: 1,
-      tags: ['En Vivo', 'Estudio', 'WebRTC', formData.category],
       thumbnailUrl: snapshot,
-      platform: 'Otro',
-      isWebRTC: true,
-      broadcastType: 'studio_webrtc',
-      status: 'published',
-      situation: 'live',
-      startedAt: serverTimestamp(),
-      ownerId: user?.uid || 'studio-host',
-      featured: true,
-    };
+    });
 
-    let docId = 'live-' + Date.now();
+    const docId = serverBroadcast?.id || generatedId;
+
+    // 2. Intento de replicación opcional en Firestore
     try {
       if (firestore) {
-        const docRef = await addDoc(collection(firestore, 'streams'), newStreamData);
-        docId = docRef.id;
-        await updateDoc(docRef, { id: docRef.id });
+        await addDoc(collection(firestore, 'streams'), {
+          id: docId,
+          title: formData.title.trim(),
+          streamer: formData.streamer.trim(),
+          category: formData.category,
+          description: formData.description.trim() || 'Transmisión en vivo desde el Estudio StreamFLIX',
+          viewerCount: 1,
+          tags: ['En Vivo', 'Estudio', 'WebRTC', formData.category],
+          thumbnailUrl: snapshot,
+          platform: 'WebRTC',
+          isWebRTC: true,
+          broadcastType: 'studio_webrtc',
+          status: 'published',
+          situation: 'live',
+          startedAt: serverTimestamp(),
+          ownerId: user?.uid || 'studio-host',
+          featured: true,
+        }).catch(() => {});
       }
-    } catch (err) {
-      console.warn('Could not save to firestore, operating in local live studio:', err);
-    }
+    } catch (err) {}
 
     setBroadcastId(docId);
     setIsBroadcasting(true);
@@ -367,141 +415,122 @@ export default function BroadcastStudio() {
     });
   };
 
-  // WebRTC Host Signaling Engine: Serves live camera/mic to any connected viewer
+  // Heartbeat continuo para mantener la señal activa en el servidor
   useEffect(() => {
-    if (!isBroadcasting || !broadcastId || !firestore) return;
+    if (!isBroadcasting || !broadcastId) return;
+    const interval = setInterval(async () => {
+      const count = await sendStudioHeartbeat(broadcastId);
+      setLiveViewers(Math.max(1, count));
+    }, 4000);
+    return () => clearInterval(interval);
+  }, [isBroadcasting, broadcastId]);
 
-    const viewersCol = collection(firestore, 'streams', broadcastId, 'webrtc_viewers');
+  // WebRTC Host Signaling Engine: Recibe espectadores en tiempo real y les envía audio/video
+  useEffect(() => {
+    if (!isBroadcasting || !broadcastId) return;
 
-    const unsubscribe = onSnapshot(viewersCol, (snapshot) => {
-      snapshot.docChanges().forEach(async (change) => {
-        const viewerId = change.doc.id;
-        const viewerData = change.doc.data();
+    let isCancelled = false;
 
-        if (change.type === 'removed') {
-          const entry = peerConnectionsRef.current.get(viewerId);
-          if (entry) {
-            if (entry.unsubCandidates) entry.unsubCandidates();
-            entry.pc.close();
-            peerConnectionsRef.current.delete(viewerId);
-            setLiveViewers(Math.max(1, peerConnectionsRef.current.size));
+    const interval = setInterval(async () => {
+      if (isCancelled) return;
+      const offers = await pollBroadcasterOffers(broadcastId);
+      for (const { viewerId, offer } of offers) {
+        if (peerConnectionsRef.current.has(viewerId)) continue;
+
+        try {
+          const pc = new RTCPeerConnection(RTC_CONFIG);
+
+          // Agregar pistas activas de cámara y micrófono
+          if (streamRef.current) {
+            streamRef.current.getTracks().forEach((track) => {
+              pc.addTrack(track, streamRef.current!);
+            });
           }
-          return;
-        }
 
-        // Viewer submitted an offer and we haven't answered yet
-        if (viewerData?.viewerOffer && !viewerData?.hostAnswer && !peerConnectionsRef.current.has(viewerId)) {
-          try {
-            const pc = new RTCPeerConnection(RTC_CONFIG);
-
-            // Add broadcaster tracks from active stream
-            if (streamRef.current) {
-              streamRef.current.getTracks().forEach((track) => {
-                pc.addTrack(track, streamRef.current!);
-              });
+          // Enviar candidatos ICE del host al servidor
+          pc.onicecandidate = (event) => {
+            if (event.candidate) {
+              sendCandidate(broadcastId, viewerId, 'host', event.candidate.toJSON());
             }
+          };
 
-            // Send host ICE candidates
-            const hostCandidatesCol = collection(
-              firestore,
-              'streams',
-              broadcastId,
-              'webrtc_viewers',
-              viewerId,
-              'host_candidates'
-            );
-            pc.onicecandidate = (event) => {
-              if (event.candidate) {
-                addDoc(hostCandidatesCol, event.candidate.toJSON()).catch(() => {});
-              }
-            };
+          // Monitor de estado de conexión
+          pc.onconnectionstatechange = () => {
+            const state = pc.connectionState;
+            if (state === 'disconnected' || state === 'failed' || state === 'closed') {
+              const entry: any = peerConnectionsRef.current.get(viewerId);
+              if (entry?.candInterval) clearInterval(entry.candInterval);
+              pc.close();
+              peerConnectionsRef.current.delete(viewerId);
+              setLiveViewers(Math.max(1, peerConnectionsRef.current.size));
+            } else if (state === 'connected') {
+              setLiveViewers(Math.max(1, peerConnectionsRef.current.size));
+            }
+          };
 
-            // Monitor state
-            pc.onconnectionstatechange = () => {
-              const state = pc.connectionState;
-              if (state === 'disconnected' || state === 'failed' || state === 'closed') {
-                const entry = peerConnectionsRef.current.get(viewerId);
-                if (entry?.unsubCandidates) entry.unsubCandidates();
-                pc.close();
-                peerConnectionsRef.current.delete(viewerId);
-                setLiveViewers(Math.max(1, peerConnectionsRef.current.size));
-              } else if (state === 'connected') {
-                setLiveViewers(Math.max(1, peerConnectionsRef.current.size));
-              }
-            };
+          // Configurar oferta remota y generar respuesta
+          await pc.setRemoteDescription(new RTCSessionDescription(offer));
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
 
-            // Set remote offer
-            await pc.setRemoteDescription(new RTCSessionDescription(viewerData.viewerOffer));
+          // Enviar respuesta al espectador a través del servidor
+          await sendHostAnswer(broadcastId, viewerId, {
+            type: answer.type,
+            sdp: answer.sdp,
+          });
 
-            // Create host answer
-            const answer = await pc.createAnswer();
-            await pc.setLocalDescription(answer);
-
-            // Write host answer back to Firestore
-            await updateDoc(doc(firestore, 'streams', broadcastId, 'webrtc_viewers', viewerId), {
-              hostAnswer: {
-                type: answer.type,
-                sdp: answer.sdp,
-              },
-              answeredAt: serverTimestamp(),
-            });
-
-            // Listen for viewer candidates
-            const viewerCandidatesCol = collection(
-              firestore,
-              'streams',
-              broadcastId,
-              'webrtc_viewers',
-              viewerId,
-              'viewer_candidates'
-            );
-            const unsubCandidates = onSnapshot(viewerCandidatesCol, (candSnap) => {
-              candSnap.docChanges().forEach(async (candChange) => {
-                if (candChange.type === 'added') {
-                  try {
-                    if (pc.remoteDescription) {
-                      await pc.addIceCandidate(new RTCIceCandidate(candChange.doc.data()));
-                    }
-                  } catch (e) {}
+          // Polling de candidatos enviados por este espectador
+          const candInterval = setInterval(async () => {
+            if (isCancelled || pc.connectionState === 'closed') return;
+            const viewerCands = await getCandidates(broadcastId, viewerId, 'host');
+            for (const cand of viewerCands) {
+              try {
+                if (pc.remoteDescription) {
+                  await pc.addIceCandidate(new RTCIceCandidate(cand));
                 }
-              });
-            });
+              } catch (e) {}
+            }
+          }, 500);
 
-            peerConnectionsRef.current.set(viewerId, { pc, unsubCandidates });
-            setLiveViewers(Math.max(1, peerConnectionsRef.current.size));
-          } catch (err) {
-            console.warn('Error connecting WebRTC peer for viewer:', viewerId, err);
-          }
+          peerConnectionsRef.current.set(viewerId, { pc, candInterval } as any);
+          setLiveViewers(Math.max(1, peerConnectionsRef.current.size));
+        } catch (err) {
+          console.warn('Error conectando WebRTC para espectador:', viewerId, err);
         }
-      });
-    });
+      }
+    }, 1000);
 
     return () => {
-      unsubscribe();
-      peerConnectionsRef.current.forEach(({ pc, unsubCandidates }) => {
-        if (unsubCandidates) unsubCandidates();
-        pc.close();
+      isCancelled = true;
+      clearInterval(interval);
+      peerConnectionsRef.current.forEach((entry: any) => {
+        if (entry.candInterval) clearInterval(entry.candInterval);
+        entry.pc.close();
       });
       peerConnectionsRef.current.clear();
     };
-  }, [isBroadcasting, broadcastId, firestore]);
+  }, [isBroadcasting, broadcastId]);
 
   // End Live Broadcast
   const handleStopBroadcast = async () => {
-    peerConnectionsRef.current.forEach(({ pc, unsubCandidates }) => {
-      if (unsubCandidates) unsubCandidates();
-      pc.close();
+    peerConnectionsRef.current.forEach((entry: any) => {
+      if (entry.candInterval) clearInterval(entry.candInterval);
+      entry.pc.close();
     });
     peerConnectionsRef.current.clear();
 
-    if (broadcastId && firestore) {
-      try {
-        await updateDoc(doc(firestore, 'streams', broadcastId), {
-          situation: 'offline',
-          lastOnlineAt: serverTimestamp(),
-        });
-      } catch (err) {}
+    if (broadcastId) {
+      await stopStudioBroadcast(broadcastId);
+      if (firestore) {
+        try {
+          await updateDoc(doc(firestore, 'streams', broadcastId), {
+            situation: 'offline',
+            lastOnlineAt: serverTimestamp(),
+          }).catch(() => {});
+        } catch (err) {}
+      }
     }
+
     setIsBroadcasting(false);
     toast({
       title: 'Transmisión Finalizada',
@@ -622,6 +651,41 @@ export default function BroadcastStudio() {
             </button>
           </div>
         </div>
+
+        {/* ALERTA DE TRANSMISIÓN ACTIVA PARA USUARIOS CONECTADOS DESDE OTRA PC */}
+        {activeOtherBroadcast && !isBroadcasting && (
+          <div className="mb-8 p-6 rounded-3xl bg-gradient-to-r from-red-950/80 via-zinc-950 to-zinc-900 border-2 border-red-600/50 shadow-[0_0_30px_rgba(255,0,0,0.3)] animate-in fade-in slide-in-from-top-4 duration-500">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div className="space-y-1.5">
+                <div className="flex items-center gap-2 text-red-500 font-black text-xs uppercase tracking-widest">
+                  <span className="w-2.5 h-2.5 rounded-full bg-red-600 animate-ping" />
+                  <span>¡Hay una transmisión activa en vivo en este momento!</span>
+                </div>
+                <h3 className="text-xl font-black text-white italic tracking-tight uppercase">
+                  {activeOtherBroadcast.title}
+                </h3>
+                <p className="text-xs text-zinc-400">
+                  Emitido por <span className="text-white font-bold">{activeOtherBroadcast.streamer}</span> ({activeOtherBroadcast.category})
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-3">
+                <Link
+                  href={`/stream/${activeOtherBroadcast.id}`}
+                  className="h-12 px-6 bg-red-600 hover:bg-red-700 text-white font-black uppercase text-xs tracking-wider rounded-xl shadow-lg flex items-center gap-2 transition-all transform hover:scale-105 active:scale-95"
+                >
+                  <Radio className="w-4 h-4 animate-pulse" /> SINTONIZAR / VER TRANSMISIÓN
+                </Link>
+              </div>
+            </div>
+            <div className="mt-4 pt-3 border-t border-white/10 text-[11px] text-zinc-400 flex items-center gap-2">
+              <Sparkles className="w-3.5 h-3.5 text-primary shrink-0" />
+              <span>
+                <strong>¿Te conectaste desde otra PC para ver?</strong> Haz clic en el botón rojo de arriba para ingresar como espectador. El panel de abajo es únicamente para conductores que quieran transmitir con su propia cámara.
+              </span>
+            </div>
+          </div>
+        )}
 
         {/* TAB 1: ESTUDIO EN VIVO CON CÁMARA Y MICRÓFONO */}
         {activeTab === 'studio' && (
@@ -963,7 +1027,7 @@ export default function BroadcastStudio() {
                     {/* Copiar Link */}
                     <div className="space-y-2">
                       <span className="text-[10px] font-black uppercase tracking-wider text-zinc-400 block">
-                        Enlace para compartir:
+                        Enlace para compartir con espectadores:
                       </span>
                       <div className="flex items-center gap-2">
                         <input
@@ -984,6 +1048,21 @@ export default function BroadcastStudio() {
                           <Copy className="w-4 h-4" />
                         </button>
                       </div>
+                    </div>
+
+                    {/* GUÍA DE CONEXIÓN DESDE OTRA PC */}
+                    <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-xs space-y-2">
+                      <div className="flex items-center gap-2 font-black uppercase tracking-wider text-amber-400">
+                        <Info className="w-4 h-4 shrink-0" /> ¿Cómo ver desde otra PC o celular?
+                      </div>
+                      <p className="text-zinc-300 text-[11px] leading-relaxed">
+                        Esta pantalla es tu <strong>Estudio de Emisión</strong>. Para que otra persona o tu otra computadora vea tu transmisión:
+                      </p>
+                      <ul className="list-disc pl-4 text-zinc-300 text-[11px] space-y-1">
+                        <li><strong>No abras el botón "Transmitir"</strong> en la otra PC (eso abriría otro estudio de emisión para una segunda cámara).</li>
+                        <li>Entra a la <strong>Página Principal (Home)</strong> de StreamFLIX donde verás tu canal en el bloque "En Vivo".</li>
+                        <li>O abre directamente el enlace público de tu transmisión: <code>/stream/{broadcastId}</code>.</li>
+                      </ul>
                     </div>
 
                     {/* Ver en reproductor */}
